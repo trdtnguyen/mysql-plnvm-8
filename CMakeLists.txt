@@ -22,6 +22,12 @@
 
 MESSAGE(STATUS "Running cmake version ${CMAKE_VERSION}")
 
+#tdnguyen added
+#define new environment variables
+SET (NVM_LIB_PMEM pmem)
+SET (NVM_LIB_PMEMOBJ pmemobj)
+#end tdnguyen added
+
 IF(WIN32)
   # CMake 3.8.0 is needed for Visual Studio 2017 and x64 toolset.
   CMAKE_MINIMUM_REQUIRED(VERSION 3.8.0)

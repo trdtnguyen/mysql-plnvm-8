@@ -51,7 +51,14 @@ SET(INNOBASE_ZIP_DECOMPRESS_SOURCES
 	ut/crc32.cc
 	ut/ut.cc)
 
+#tdnguyen add pmem dir and files
 SET(INNOBASE_SOURCES
+	pmem/pmem0wrapper.cc
+	pmem/pmem0buf.cc
+	pmem/pmem0logbuf.cc
+	pmem/pmem0dbw.cc
+	pmem/pmem0log.cc
+	pmem/pmem0bloom.cc
 	api/api0api.cc
 	api/api0misc.cc
 	arch/arch0arch.cc
