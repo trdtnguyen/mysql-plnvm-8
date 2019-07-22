@@ -4314,10 +4314,119 @@ static int innodb_init_params() {
 
   Fil_path::normalize(ibt::srv_temp_dir);
 
+	/*
+	 * tdnguyen: We add the additional param from here
+	* */
+#if defined(UNIV_AIO_IMPROVE)
+  if (!srv_aio_n_slots_per_seg) {
+	  srv_aio_n_slots_per_seg = 256;
+  }
+#endif //UNIV_AIO_IMPROVE
+#if defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+	if (!srv_pmem_home_dir) {
+		srv_pmem_home_dir = (char*) "/mnt/pmem1";
+	}
+	if (!srv_pmem_pool_size) {
+		srv_pmem_pool_size = 8 * 1024; //8 GB
+	}
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	if (!srv_ppl_n_log_buckets) {
+		srv_ppl_n_log_buckets = 32;
+	}
+	if (!srv_ppl_blocks_per_bucket) {
+		srv_ppl_blocks_per_bucket = 8192;
+	}
+	if (!srv_ppl_log_buf_size) {
+		srv_ppl_log_buf_size = 64 * 4 * 1024;
+	}
+	if (!srv_ppl_tt_n_lines) {
+		srv_ppl_tt_n_lines = 128;
+	}
+	if (!srv_ppl_tt_entries_per_line) {
+		srv_ppl_tt_entries_per_line = 128;
+	}
+	if (!srv_ppl_tt_pages_per_tx) {
+		srv_ppl_tt_pages_per_tx = 64;
+	}
+	if (!srv_ppl_log_buf_flush_pct) {
+		srv_ppl_log_buf_flush_pct = 0.9;
+	}
+	if (!srv_ppl_ckpt_threshold) {
+		srv_ppl_ckpt_threshold = 0.7;
+	}
+	if (!srv_ppl_log_flusher_wake_threshold) {
+		srv_ppl_log_flusher_wake_threshold = 5;
+	}
+	if (!srv_ppl_n_log_flush_threads) {
+		srv_ppl_n_log_flush_threads = 32;
+	}
+	if (!srv_ppl_n_redoer_threads) {
+		srv_ppl_n_redoer_threads = 32;
+	}
+	if (!srv_ppl_log_file_size) {
+		srv_ppl_log_file_size = 16*1024;
+	}
+	if (!srv_ppl_log_files_per_bucket) {
+		srv_ppl_log_files_per_bucket = 1;
+	}
+#endif
+#if defined (UNIV_PMEM_SIM_LATENCY)
+	if (!srv_pmem_sim_latency) {
+		srv_pmem_sim_latency = 1000 ; //1000 ns
+	}
+#endif
+
+#if defined(UNIV_PMEMOBJ_BUF) 
+	if (!srv_pmem_buf_bucket_size) {
+		srv_pmem_buf_bucket_size = 256;
+	}
+	if (!srv_pmem_buf_size) {
+		srv_pmem_buf_size = 4 * 1024 ; //4 GB
+	}
+	if (!srv_pmem_buf_n_buckets) {
+		srv_pmem_buf_n_buckets = 128;
+	}
+	if (!srv_pmem_buf_flush_pct) {
+		srv_pmem_buf_flush_pct = 0.9; 
+	}
+#endif 
+
+#if defined (UNIV_PMEMOBJ_BUF_FLUSHER)
+	if (!srv_pmem_n_flush_threads) {
+		srv_pmem_n_flush_threads = 8;
+	}
+	if (!srv_pmem_flush_threshold) {
+		srv_pmem_flush_threshold = srv_pmem_n_flush_threads - 2;
+	}
+#endif 
+
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+	if (!srv_pmem_n_space_bits) {
+		srv_pmem_n_space_bits = 5;
+	}
+	if (!srv_pmem_page_per_bucket_bits) {
+		srv_pmem_page_per_bucket_bits = 8;
+	}
+#endif 
+
+#if defined (UNIV_PMEMOBJ_BLOOM)
+	if (!srv_pmem_bloom_n_elements) {
+		srv_pmem_bloom_n_elements = 1000000;
+	}
+	// bloom filter false-negative-probability
+	if (!srv_pmem_bloom_fpr) {
+		srv_pmem_bloom_fpr = 0.01;
+	}
+
+#endif
+
+
   /* The default dir for log files is the datadir of MySQL */
 
   if (srv_log_group_home_dir == nullptr) {
-    srv_log_group_home_dir = default_path;
+	  srv_log_group_home_dir = default_path;
   }
   Fil_path::normalize(srv_log_group_home_dir);
 
@@ -20691,6 +20800,150 @@ static MYSQL_SYSVAR_BOOL(force_load_corrupted, srv_load_corrupted,
                          "Force InnoDB to load metadata of corrupted table.",
                          NULL, NULL, FALSE);
 
+/*tdnguyen: We add our additional params from here*/
+#if defined (UNIV_AIO_IMPROVE)
+ static MYSQL_SYSVAR_ULONG(aio_n_slots_per_seg, srv_aio_n_slots_per_seg,
+		 PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+		 "Max number of slots per segment in AIO, from 1 to 65536, default is 256.",
+		 NULL, NULL, 256, 1, 65536, 0);
+#endif //UNIV_AIO_IMPROVE
+#if defined(UNIV_PMEMOBJ_BUF_FLUSHER)
+static MYSQL_SYSVAR_ULONG(pmem_n_flush_threads, srv_pmem_n_flush_threads,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of threads in flusher, from 1 to 64, default is 8.",
+  NULL, NULL, 8, 1, 64, 0);
+
+static MYSQL_SYSVAR_ULONG(pmem_flush_threshold, srv_pmem_flush_threshold,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "If the pointer assign in thread flusher larger than this threshold. The batch flush is trigger, from 1 to 64, default is number of flusher threads - 2.",
+  NULL, NULL, 6, 1, 64, 0);
+
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+static MYSQL_SYSVAR_ULONG(pmem_n_space_bits, srv_pmem_n_space_bits,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of bits present a page_no in partition algorithm, from 1 to 32 (space_no is 4-bytes number), default is 5.",
+  NULL, NULL, 5, 1, 32,0);
+static MYSQL_SYSVAR_ULONG(pmem_page_per_bucket_bits, srv_pmem_page_per_bucket_bits,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of bits present the maxmum number of pages per space in a bucket in partition algorithm, from 1 to log2(srv_pmem_buf_bucket_size), default is 10.",
+  NULL, NULL, 10, 1, 32, 0);
+#endif 
+
+#if defined (UNIV_PMEMOBJ_BLOOM)
+static MYSQL_SYSVAR_ULONG(pmem_bloom_n_elements, srv_pmem_bloom_n_elements,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of maximum elements inserted in the bloom filter, from 1 to 10000000, default is 1000000.",
+  NULL, NULL, 1000000, 1, 10000000,0);
+static MYSQL_SYSVAR_DOUBLE(pmem_bloom_fpr, srv_pmem_bloom_fpr,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Maximum false-positive rate allowed, from 0 to 1, default is 0.001",
+  NULL, NULL, 0.001, 0, 1,0);
+#endif
+
+#if defined (UNIV_PMEM_SIM_LATENCY)
+static MYSQL_SYSVAR_ULONG(pmem_sim_latency, srv_pmem_sim_latency,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Additional latency , from 1 ns to 10000000, default 1000.",
+  NULL, NULL, 1000, 1, 10000000,0);
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+static MYSQL_SYSVAR_STR(pmem_home_dir, srv_pmem_home_dir,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Path to PMEM home dir.", NULL, NULL, NULL);
+static MYSQL_SYSVAR_ULONG(pmem_pool_size, srv_pmem_pool_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "PMEMobjpool size, from 1GB to 16GB, default 8GB.",
+  NULL, NULL, 8*1024, 1024, 16*1024,0);
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF)
+static MYSQL_SYSVAR_ULONG(pmem_buf_size, srv_pmem_buf_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "PMEM BUFFER SIZE from 1MB to 16GB, default is 4GB.",
+  NULL, NULL, 4*1024, 1, 16*1024,0);
+static MYSQL_SYSVAR_ULONG(pmem_buf_n_buckets, srv_pmem_buf_n_buckets,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of buckets in the partition, from 1 to 1024*1024, default is 128.",
+  NULL, NULL, 128, 1, 1024*1024,0);
+static MYSQL_SYSVAR_ULONG(pmem_buf_bucket_size, srv_pmem_buf_bucket_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Size of buckets (number of pages), from 1 to 65536, default is 256.",
+  NULL, NULL, 256, 1, 65536, 0);
+static MYSQL_SYSVAR_DOUBLE(pmem_buf_flush_pct, srv_pmem_buf_flush_pct,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Threshold to flush a sub-list, from 0.1 to 1, default is 0.9",
+  NULL, NULL, 0.9, 0.1, 1,0);
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+static MYSQL_SYSVAR_ULONG(ppl_n_log_buckets, srv_ppl_n_log_buckets,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of buckets in the per-page hashtable, default is 32",
+  NULL, NULL, 32, 1, 4096, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_blocks_per_bucket, srv_ppl_blocks_per_bucket,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of log blocks per bucket in the per-page hashtable, default is 8192",
+  NULL, NULL, 8192, 1, 1048576, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_log_buf_size, srv_ppl_log_buf_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Per-line log buffer size, default is 262144",
+  NULL, NULL, 262144, 1, 268435456, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_tt_n_lines, srv_ppl_tt_n_lines,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of lines on the Transaction Table (TT), default is 128",
+  NULL, NULL, 128, 1, 1048576, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_tt_entries_per_line, srv_ppl_tt_entries_per_line,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of entries per line on the Transaction Table (TT), default is 128",
+  NULL, NULL, 128, 1, 1048576, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_tt_pages_per_tx, srv_ppl_tt_pages_per_tx,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of refpage per entry  on the Transaction Table (TT), default is 64",
+  NULL, NULL, 64, 1, 1048576, 0);
+
+static MYSQL_SYSVAR_DOUBLE(ppl_log_buf_flush_pct, srv_ppl_log_buf_flush_pct,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Percentage of log size fill on log buffer to trigger the flush , default is 0.9",
+  NULL, NULL, 0.9, 0.1, 1, 0);
+
+static MYSQL_SYSVAR_DOUBLE(ppl_ckpt_threshold, srv_ppl_ckpt_threshold,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Percentage of log file fill to trigger the checkpoint, default is 0.7",
+  NULL, NULL, 0.7, 0.05, 1000, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_log_flusher_wake_threshold, srv_ppl_log_flusher_wake_threshold,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of log buffer in the flusher to trigger AIO flush, default is 5",
+  NULL, NULL, 5, 1, 32, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_n_log_flush_threads, srv_ppl_n_log_flush_threads,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of IO threads to handle log flush, default is 32",
+  NULL, NULL, 32, 1, 256, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_n_redoer_threads, srv_ppl_n_redoer_threads,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of redoer threads to handle REDO , default is 32",
+  NULL, NULL, 32, 1, 256, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_log_file_size, srv_ppl_log_file_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Size of the partition log file in 4-KB, default is 16*1024",
+  NULL, NULL, 16384, 1, 163840, 0);
+
+static MYSQL_SYSVAR_ULONG(ppl_log_files_per_bucket, srv_ppl_log_files_per_bucket,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Number of partitioned file per bucket, default is 1",
+  NULL, NULL, 1, 1, 4, 0);
+#endif //UNIV_PMEMOBJ_PART_PL
 static MYSQL_SYSVAR_STR(log_group_home_dir, srv_log_group_home_dir,
                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY |
                             PLUGIN_VAR_NOPERSIST,
@@ -21741,6 +21994,55 @@ static SYS_VAR *innobase_system_variables[] = {
     MYSQL_SYSVAR(log_spin_cpu_pct_hwm),
     MYSQL_SYSVAR(log_wait_for_flush_spin_hwm),
 #ifdef ENABLE_EXPERIMENT_SYSVARS
+/*tdnguyen: We declare our additional params from here*/
+#if defined (UNIV_AIO_IMPROVE)
+	MYSQL_SYSVAR(aio_n_slots_per_seg),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF)
+  MYSQL_SYSVAR(pmem_buf_bucket_size),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF_FLUSHER)
+  MYSQL_SYSVAR(pmem_n_flush_threads),
+  MYSQL_SYSVAR(pmem_flush_threshold),
+#endif 
+#if defined (UNIV_PMEM_SIM_LATENCY)
+  MYSQL_SYSVAR(pmem_sim_latency),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+  MYSQL_SYSVAR(pmem_n_space_bits),
+  MYSQL_SYSVAR(pmem_page_per_bucket_bits),
+#endif
+#if defined (UNIV_PMEMOBJ_BLOOM)
+  MYSQL_SYSVAR(pmem_bloom_n_elements),
+  MYSQL_SYSVAR(pmem_bloom_fpr),
+
+#endif
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+  MYSQL_SYSVAR(pmem_home_dir),
+  MYSQL_SYSVAR(pmem_pool_size),
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF)
+  MYSQL_SYSVAR(pmem_buf_size),
+  MYSQL_SYSVAR(pmem_buf_n_buckets),
+  MYSQL_SYSVAR(pmem_buf_flush_pct),
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  MYSQL_SYSVAR(ppl_n_log_buckets),
+  MYSQL_SYSVAR(ppl_blocks_per_bucket),
+  MYSQL_SYSVAR(ppl_log_buf_size),
+  MYSQL_SYSVAR(ppl_tt_n_lines),
+  MYSQL_SYSVAR(ppl_tt_entries_per_line),
+  MYSQL_SYSVAR(ppl_tt_pages_per_tx),
+  MYSQL_SYSVAR(ppl_log_buf_flush_pct),
+  MYSQL_SYSVAR(ppl_ckpt_threshold),
+  MYSQL_SYSVAR(ppl_log_flusher_wake_threshold),
+  MYSQL_SYSVAR(ppl_n_log_flush_threads),
+  MYSQL_SYSVAR(ppl_n_redoer_threads),
+  MYSQL_SYSVAR(ppl_log_file_size),
+  MYSQL_SYSVAR(ppl_log_files_per_bucket),
+#endif //UNIV_PMEMOBJ_PART_PL
     MYSQL_SYSVAR(log_write_events),
     MYSQL_SYSVAR(log_flush_events),
     MYSQL_SYSVAR(log_recent_written_size),

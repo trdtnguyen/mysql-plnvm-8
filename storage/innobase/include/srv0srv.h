@@ -299,6 +299,55 @@ extern const page_no_t SRV_UNDO_TABLESPACE_SIZE_IN_PAGES;
 
 extern char *srv_log_group_home_dir;
 
+/*tdnguyen: we declare our additional params from here*/
+#if defined(UNIV_AIO_IMPROVE)
+extern ulong srv_aio_n_slots_per_seg;
+#endif //UNIV_AIO_IMPROVE
+#if defined(UNIV_PMEMOBJ_BUF)
+extern ulong	srv_pmem_buf_bucket_size;
+#endif
+#if defined(UNIV_PMEMOBJ_BUF_FLUSHER)
+extern ulong	srv_pmem_n_flush_threads;
+extern ulong	srv_pmem_flush_threshold;
+#endif
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+extern ulong	srv_pmem_n_space_bits;
+extern ulong	srv_pmem_page_per_bucket_bits;
+#endif
+#if defined (UNIV_PMEMOBJ_BLOOM)
+extern ulong	srv_pmem_bloom_n_elements;
+extern double	srv_pmem_bloom_fpr;
+#endif
+
+#if defined (UNIV_PMEM_SIM_LATENCY)
+extern ulong	srv_pmem_sim_latency;
+#endif
+
+#if defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined(UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+extern char*	srv_pmem_home_dir;
+extern ulong	srv_pmem_pool_size;
+extern ulong	srv_pmem_buf_size;
+extern ulong	srv_pmem_buf_n_buckets;
+extern double	srv_pmem_buf_flush_pct;
+#endif 
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+extern ulong	srv_ppl_n_log_buckets;
+extern ulong	srv_ppl_blocks_per_bucket;
+extern ulong	srv_ppl_log_buf_size;
+extern ulong	srv_ppl_tt_n_lines;
+extern ulong	srv_ppl_tt_entries_per_line;
+extern ulong	srv_ppl_tt_pages_per_tx;
+extern double	srv_ppl_log_buf_flush_pct;
+extern double	srv_ppl_ckpt_threshold;
+extern ulong	srv_ppl_log_flusher_wake_threshold;
+extern ulong	srv_ppl_n_log_flush_threads;
+extern ulong	srv_ppl_n_redoer_threads;
+extern ulong	srv_ppl_log_file_size;
+extern ulong	srv_ppl_log_files_per_bucket;
+
+#endif
+
 /** Enable or Disable Encrypt of REDO tablespace. */
 extern bool srv_redo_log_encrypt;
 

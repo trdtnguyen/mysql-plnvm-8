@@ -208,6 +208,58 @@ static os_event_t srv_master_thread_disabled_event;
 #endif /* !UNIV_HOTBACKUP */
 #endif /* UNIV_DEBUG */
 
+/*tdnguyen: declare our addictional params from here*/
+#if defined (UNIV_AIO_IMPROVE)
+ulong	srv_aio_n_slots_per_seg = 256;
+#endif
+#if defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_AIO_IMPROVE)
+ulong   srv_pmem_buf_bucket_size    = 256;
+#endif
+
+#if defined(UNIV_PMEMOBJ_BUF_FLUSHER)
+ulong	srv_pmem_n_flush_threads	= 8;
+ulong	srv_pmem_flush_threshold	= 6;
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+ulong	srv_pmem_n_space_bits			= 5;
+ulong	srv_pmem_page_per_bucket_bits	= 10;
+#endif
+
+#if defined (UNIV_PMEMOBJ_BLOOM)
+ulong	srv_pmem_bloom_n_elements	= 10000000;
+double	srv_pmem_bloom_fpr			= 0.01;
+#endif
+
+#if defined (UNIV_PMEM_SIM_LATENCY)
+ulong	srv_pmem_sim_latency			= 1000;
+#endif
+
+#if defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+char*	srv_pmem_home_dir			= NULL;
+ulong	srv_pmem_pool_size			= 8 * 1024;
+ulong	srv_pmem_buf_size			= 4 * 1024;
+ulong	srv_pmem_buf_n_buckets		= 128;
+double	srv_pmem_buf_flush_pct		= 0.9;
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+ulong	srv_ppl_n_log_buckets = 32;
+ulong	srv_ppl_blocks_per_bucket = 8192;
+ulong	srv_ppl_log_buf_size = 262144;
+ulong	srv_ppl_tt_n_lines = 128;
+ulong	srv_ppl_tt_entries_per_line = 128;
+ulong	srv_ppl_tt_pages_per_tx = 64;
+double	srv_ppl_log_buf_flush_pct = 0.9;
+double	srv_ppl_ckpt_threshold = 0.7;
+ulong	srv_ppl_log_flusher_wake_threshold = 5;
+ulong	srv_ppl_n_log_flush_threads = 32;
+ulong	srv_ppl_n_redoer_threads = 32;
+ulong	srv_ppl_log_file_size = 16384;
+ulong	srv_ppl_log_files_per_bucket = 1;
+
+#endif //UNIV_PMEMOBJ_PART_PL
+
 /*------------------------- LOG FILES ------------------------ */
 char *srv_log_group_home_dir = NULL;
 

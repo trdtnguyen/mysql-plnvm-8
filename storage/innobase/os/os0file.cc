@@ -291,9 +291,13 @@ mysql_pfs_key_t innodb_clone_file_key;
 #endif /* !UNIV_HOTBACKUP */
 /** The asynchronous I/O context */
 struct Slot {
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_AIO_IMPROVE)
+  /** index of the slot in the aio array, we use uint32_t instead of uint16_t to increase the limitation of the maximum slots */
+  uint32_t pos{0};
+#else
   /** index of the slot in the aio array */
   uint16_t pos{0};
-
+#endif 
   /** true if this slot is reserved */
   bool is_reserved{false};
 
@@ -5922,8 +5926,11 @@ AIO::AIO(latch_id_t id, ulint n, ulint segments)
 dberr_t AIO::init_slots() {
   for (ulint i = 0; i < m_slots.size(); ++i) {
     Slot &slot = m_slots[i];
-
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_AIO_IMPROVE)
+    slot.pos = static_cast<uint32_t>(i);
+#else
     slot.pos = static_cast<uint16_t>(i);
+#endif
 
     slot.is_reserved = false;
 
@@ -6342,7 +6349,11 @@ No i/o handler thread needs to be created for that
 @param[in]	n_slots_sync	number of slots in the sync aio array */
 bool os_aio_init(ulint n_readers, ulint n_writers, ulint n_slots_sync) {
   /* Maximum number of pending aio operations allowed per segment */
+#if defined (UNIV_AIO_IMPROVE)
+  ulint limit = srv_aio_n_slots_per_seg;
+#else
   ulint limit = 8 * OS_AIO_N_PENDING_IOS_PER_THREAD;
+#endif
 
 #ifdef _WIN32
   if (srv_use_native_aio) {
