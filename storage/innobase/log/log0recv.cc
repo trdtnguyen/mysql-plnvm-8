@@ -619,6 +619,10 @@ void recv_sys_init(ulint max_mem) {
   recv_sys->found_corrupt_log = false;
   recv_sys->found_corrupt_fs = false;
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	/*this variable only used for the original*/
+	recv_sys->redo1_time = 0;
+#endif
   recv_max_page_lsn = 0;
 
   /* Call the constructor for both placement new objects. */
@@ -3462,6 +3466,9 @@ static void recv_recovery_begin(log_t &log, lsn_t *contiguous_lsn) {
   bool finished = false;
 
   while (!finished) {
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	  ulint t1 = ut_time_us(NULL);
+#endif
     lsn_t end_lsn = start_lsn + RECV_SCAN_SIZE;
 
     recv_read_log_seg(log, log.buf, start_lsn, end_lsn);
@@ -3471,6 +3478,10 @@ static void recv_recovery_begin(log_t &log, lsn_t *contiguous_lsn) {
                                   &log.scanned_lsn);
 
     start_lsn = end_lsn;
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	ulint t2 = ut_time_us(NULL);
+	recv_sys->redo1_time += (t2 - t1);
+#endif
   }
 
   DBUG_PRINT("ib_log", ("scan " LSN_PF " completed", log.scanned_lsn));

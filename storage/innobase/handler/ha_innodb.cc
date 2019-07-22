@@ -21937,6 +21937,55 @@ static SYS_VAR *innobase_system_variables[] = {
     MYSQL_SYSVAR(buffer_pool_dump_at_shutdown),
     MYSQL_SYSVAR(buffer_pool_in_core_file),
     MYSQL_SYSVAR(buffer_pool_dump_pct),
+/*tdnguyen: We declare our additional params from here*/
+#if defined (UNIV_AIO_IMPROVE)
+	MYSQL_SYSVAR(aio_n_slots_per_seg),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF)
+  MYSQL_SYSVAR(pmem_buf_bucket_size),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF_FLUSHER)
+  MYSQL_SYSVAR(pmem_n_flush_threads),
+  MYSQL_SYSVAR(pmem_flush_threshold),
+#endif 
+#if defined (UNIV_PMEM_SIM_LATENCY)
+  MYSQL_SYSVAR(pmem_sim_latency),
+#endif
+#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
+  MYSQL_SYSVAR(pmem_n_space_bits),
+  MYSQL_SYSVAR(pmem_page_per_bucket_bits),
+#endif
+#if defined (UNIV_PMEMOBJ_BLOOM)
+  MYSQL_SYSVAR(pmem_bloom_n_elements),
+  MYSQL_SYSVAR(pmem_bloom_fpr),
+
+#endif
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+  MYSQL_SYSVAR(pmem_home_dir),
+  MYSQL_SYSVAR(pmem_pool_size),
+#endif
+
+#if defined (UNIV_PMEMOBJ_BUF)
+  MYSQL_SYSVAR(pmem_buf_size),
+  MYSQL_SYSVAR(pmem_buf_n_buckets),
+  MYSQL_SYSVAR(pmem_buf_flush_pct),
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  MYSQL_SYSVAR(ppl_n_log_buckets),
+  MYSQL_SYSVAR(ppl_blocks_per_bucket),
+  MYSQL_SYSVAR(ppl_log_buf_size),
+  MYSQL_SYSVAR(ppl_tt_n_lines),
+  MYSQL_SYSVAR(ppl_tt_entries_per_line),
+  MYSQL_SYSVAR(ppl_tt_pages_per_tx),
+  MYSQL_SYSVAR(ppl_log_buf_flush_pct),
+  MYSQL_SYSVAR(ppl_ckpt_threshold),
+  MYSQL_SYSVAR(ppl_log_flusher_wake_threshold),
+  MYSQL_SYSVAR(ppl_n_log_flush_threads),
+  MYSQL_SYSVAR(ppl_n_redoer_threads),
+  MYSQL_SYSVAR(ppl_log_file_size),
+  MYSQL_SYSVAR(ppl_log_files_per_bucket),
+#endif //UNIV_PMEMOBJ_PART_PL
 #ifdef UNIV_DEBUG
     MYSQL_SYSVAR(buffer_pool_evict),
 #endif /* UNIV_DEBUG */
@@ -21994,55 +22043,6 @@ static SYS_VAR *innobase_system_variables[] = {
     MYSQL_SYSVAR(log_spin_cpu_pct_hwm),
     MYSQL_SYSVAR(log_wait_for_flush_spin_hwm),
 #ifdef ENABLE_EXPERIMENT_SYSVARS
-/*tdnguyen: We declare our additional params from here*/
-#if defined (UNIV_AIO_IMPROVE)
-	MYSQL_SYSVAR(aio_n_slots_per_seg),
-#endif
-#if defined (UNIV_PMEMOBJ_BUF)
-  MYSQL_SYSVAR(pmem_buf_bucket_size),
-#endif
-#if defined (UNIV_PMEMOBJ_BUF_FLUSHER)
-  MYSQL_SYSVAR(pmem_n_flush_threads),
-  MYSQL_SYSVAR(pmem_flush_threshold),
-#endif 
-#if defined (UNIV_PMEM_SIM_LATENCY)
-  MYSQL_SYSVAR(pmem_sim_latency),
-#endif
-#if defined (UNIV_PMEMOBJ_BUF_PARTITION)
-  MYSQL_SYSVAR(pmem_n_space_bits),
-  MYSQL_SYSVAR(pmem_page_per_bucket_bits),
-#endif
-#if defined (UNIV_PMEMOBJ_BLOOM)
-  MYSQL_SYSVAR(pmem_bloom_n_elements),
-  MYSQL_SYSVAR(pmem_bloom_fpr),
-
-#endif
-#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_DBW) || defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
-  MYSQL_SYSVAR(pmem_home_dir),
-  MYSQL_SYSVAR(pmem_pool_size),
-#endif
-
-#if defined (UNIV_PMEMOBJ_BUF)
-  MYSQL_SYSVAR(pmem_buf_size),
-  MYSQL_SYSVAR(pmem_buf_n_buckets),
-  MYSQL_SYSVAR(pmem_buf_flush_pct),
-#endif
-
-#if defined (UNIV_PMEMOBJ_PART_PL)
-  MYSQL_SYSVAR(ppl_n_log_buckets),
-  MYSQL_SYSVAR(ppl_blocks_per_bucket),
-  MYSQL_SYSVAR(ppl_log_buf_size),
-  MYSQL_SYSVAR(ppl_tt_n_lines),
-  MYSQL_SYSVAR(ppl_tt_entries_per_line),
-  MYSQL_SYSVAR(ppl_tt_pages_per_tx),
-  MYSQL_SYSVAR(ppl_log_buf_flush_pct),
-  MYSQL_SYSVAR(ppl_ckpt_threshold),
-  MYSQL_SYSVAR(ppl_log_flusher_wake_threshold),
-  MYSQL_SYSVAR(ppl_n_log_flush_threads),
-  MYSQL_SYSVAR(ppl_n_redoer_threads),
-  MYSQL_SYSVAR(ppl_log_file_size),
-  MYSQL_SYSVAR(ppl_log_files_per_bucket),
-#endif //UNIV_PMEMOBJ_PART_PL
     MYSQL_SYSVAR(log_write_events),
     MYSQL_SYSVAR(log_flush_events),
     MYSQL_SYSVAR(log_recent_written_size),

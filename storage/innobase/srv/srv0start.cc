@@ -1864,6 +1864,35 @@ dberr_t srv_start(bool create_new_db, const std::string &scan_directories) {
   size_t dirnamelen;
   unsigned i = 0;
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+  ulint start_recv_time;
+  ulint end_recv_time;
+
+  ulint start_redo1_time;
+  ulint end_redo1_time;
+
+  ulint start_create_undo_time; //start reconstruct UNDO page
+  ulint end_create_undo_time; //start reconstruct UNDO page
+
+  ulint start_redo2_time;
+  ulint end_redo2_time;
+
+  ulint start_rollback_time;
+  ulint end_rollback_time;
+
+  ulint t1, t2, t3;
+  ulint other_time;
+  ulint total_recv_time;		
+
+  start_recv_time = end_recv_time = 
+	  start_redo1_time = end_redo1_time =
+	  start_create_undo_time = end_create_undo_time =
+	  start_redo2_time = end_redo2_time =
+	  start_rollback_time = end_rollback_time =
+	  t1 = t2 = t3 = 0;
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
+
+
   DBUG_ASSERT(srv_dict_metadata == NULL);
   /* Reset the start state. */
   srv_start_state = SRV_START_STATE_NONE;
@@ -1961,6 +1990,10 @@ dberr_t srv_start(bool create_new_db, const std::string &scan_directories) {
   /* Switch latching order checks on in sync0debug.cc, if
   --innodb-sync-debug=false (default) */
   ut_d(sync_check_enable());
+
+#if defined (UNIV_AIO_IMPROVE)
+  ib::info() << "n_slots_per_seg=" << srv_aio_n_slots_per_seg << ";\n";
+#endif
 
   srv_boot();
 
@@ -2394,7 +2427,17 @@ files_checked:
     /* We always try to do a recovery, even if the database had
     been shut down normally: this is the normal startup path */
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	/*we start trace the recovery time right before the recv_recvoery_from_checkpoint_start() call*/
+	start_recv_time = ut_time_us(NULL);
+	start_redo1_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
+
     err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
+
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	end_redo1_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
 
     arch_page_sys->post_recovery_init();
 
@@ -2424,6 +2467,10 @@ files_checked:
       log_start_background_threads(*log_sys);
     }
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+		start_redo2_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
+
     if (srv_force_recovery < SRV_FORCE_NO_LOG_REDO) {
       /* Apply the hashed log records to the
       respective file pages, for the last batch of
@@ -2450,6 +2497,10 @@ files_checked:
       which had redo log records but we couldn't apply
       them because the filenames were missing. */
     }
+
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+		end_redo2_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
 
     if (srv_force_recovery < SRV_FORCE_NO_LOG_REDO) {
       /* Recovery complete, start verifying the
@@ -2611,6 +2662,10 @@ files_checked:
       log_buffer_flush_to_disk(*log_sys);
     }
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+		start_create_undo_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
+
     err = srv_undo_tablespaces_init(false);
 
     if (err != DB_SUCCESS && srv_force_recovery < SRV_FORCE_NO_UNDO_LOG_SCAN) {
@@ -2703,6 +2758,10 @@ files_checked:
   }
   undo::spaces->s_unlock();
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+		end_create_undo_time = ut_time_us(NULL);
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
+
   /* Undo Tablespaces and Rollback Segments are ready. */
   srv_startup_is_before_trx_rollback_phase = false;
 
@@ -2783,6 +2842,33 @@ files_checked:
   ib::info(ER_IB_MSG_1151, INNODB_VERSION_STR,
            ulonglong{log_get_lsn(*log_sys)});
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	end_recv_time = ut_time_us(NULL);
+
+	//Now we sumup the recovery overhead
+	t1 = (ulint) (end_redo1_time - start_redo1_time) * 1.0 / 1000;
+	t2 = (ulint) (end_create_undo_time - start_create_undo_time) * 1.0 / 1000;
+	t3 = (ulint) (end_redo2_time - start_redo2_time) * 1.0 / 1000;
+
+	total_recv_time = (ulint) (end_recv_time - start_recv_time) * 1.0 / 1000;
+
+	other_time = total_recv_time - t1 - t2 - t3;
+
+	/*adjust the t1 and t3 for the original because it may call REDO2 in between REDO1 and the last REDO2*/
+	ulint tem = (ulint) (recv_sys->redo1_time * 1.0 / 1000);
+	t1 = t1 - tem;
+	t3 = t3 + tem;
+		
+	printf("============= RECOVERY OVERHEAD MySQL 8.0==========\n");		
+	printf("Redo phase1 time (ms):\t\t %zu\n", t1); 
+	printf("Create RSEG time (ms):\t\t %zu\n", t2);
+	printf("Redo phase2 time (ms):\t\t %zu\n", t3); 
+
+	printf("Others time (ms):\t\t %zu\n", other_time);
+	printf("Total time (ms):\t\t %zu\n", total_recv_time);
+
+	printf("==========================================\n");		
+#endif /* UNIV_TRACE_RECOVERY_TIME*/
   return (DB_SUCCESS);
 }
 

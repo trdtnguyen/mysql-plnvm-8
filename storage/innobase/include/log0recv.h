@@ -414,6 +414,10 @@ struct recv_sys_t {
       std::unordered_map<page_no_t, recv_addr_t *, std::hash<page_no_t>,
                          std::equal_to<page_no_t>>;
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	ulint		redo1_time;
+#endif //UNIV_TRACE_RECOVERY_TIME
+
   /** Every space has its own heap and pages that belong to it. */
   struct Space {
     /** Constructor
