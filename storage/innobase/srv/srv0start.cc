@@ -1884,12 +1884,16 @@ dberr_t srv_start(bool create_new_db, const std::string &scan_directories) {
   ulint other_time;
   ulint total_recv_time;		
 
+  ulint start_tem1, end_tem1, start_tem2, end_tem2;
+
   start_recv_time = end_recv_time = 
 	  start_redo1_time = end_redo1_time =
 	  start_create_undo_time = end_create_undo_time =
 	  start_redo2_time = end_redo2_time =
 	  start_rollback_time = end_rollback_time =
 	  t1 = t2 = t3 = 0;
+
+  printf("====> start tracing recovery...\n");
 #endif /* UNIV_TRACE_RECOVERY_TIME*/
 
 
@@ -2533,11 +2537,15 @@ files_checked:
       ib::warn(ER_IB_MSG_1140);
     }
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	start_tem1 = ut_time_us(NULL);
+#endif 
     if (!srv_force_recovery && !srv_read_only_mode) {
       buf_flush_sync_all_buf_pools();
     }
 
     srv_dict_metadata = recv_recovery_from_checkpoint_finish(*log_sys, false);
+
 
     if (!srv_force_recovery && !recv_sys->found_corrupt_log &&
         (srv_log_file_size_requested != srv_log_file_size ||
@@ -2646,6 +2654,9 @@ files_checked:
       log_start_background_threads(*log_sys);
     }
 
+#if defined (UNIV_TRACE_RECOVERY_TIME)
+	end_tem1 = ut_time_us(NULL);
+#endif 
     if (sum_of_new_sizes > 0) {
       /* New data file(s) were added */
       mtr_start(&mtr);
@@ -2850,19 +2861,26 @@ files_checked:
 	t2 = (ulint) (end_create_undo_time - start_create_undo_time) * 1.0 / 1000;
 	t3 = (ulint) (end_redo2_time - start_redo2_time) * 1.0 / 1000;
 
+	ulint tem_du = (ulint) (end_tem1 - start_tem1) * 1.0 / 1000;
+
 	total_recv_time = (ulint) (end_recv_time - start_recv_time) * 1.0 / 1000;
 
 	other_time = total_recv_time - t1 - t2 - t3;
 
 	/*adjust the t1 and t3 for the original because it may call REDO2 in between REDO1 and the last REDO2*/
-	ulint tem = (ulint) (recv_sys->redo1_time * 1.0 / 1000);
+	ulint tem = (ulint) (recv_sys->recv_extra_apply_time * 1.0 / 1000);
 	t1 = t1 - tem;
 	t3 = t3 + tem;
 		
 	printf("============= RECOVERY OVERHEAD MySQL 8.0==========\n");		
-	printf("Redo phase1 time (ms):\t\t %zu\n", t1); 
-	printf("Create RSEG time (ms):\t\t %zu\n", t2);
-	printf("Redo phase2 time (ms):\t\t %zu\n", t3); 
+	printf("Redo phase1 time (ms):\t\t %zu start at %zu end at %zu\n", t1, start_redo1_time - start_recv_time, end_redo1_time - start_recv_time); 
+	printf("Create RSEG time (ms):\t\t %zu start at %zu end at %zu\n", t2, start_create_undo_time - start_recv_time, end_create_undo_time - start_recv_time);
+	printf("Redo phase2 time (ms):\t\t %zu start at %zu end at %zu\n", t3, start_redo2_time - start_recv_time, end_redo2_time - start_recv_time); 
+
+	printf("Tem time (ms):\t\t %zu start at %zu end at %zu\n", tem_du, start_tem1 - start_recv_time, end_tem1 - start_recv_time); 
+	//printf("Redo phase1 time (ms):\t\t %zu\n", t1); 
+	//printf("Create RSEG time (ms):\t\t %zu\n", t2);
+	//printf("Redo phase2 time (ms):\t\t %zu\n", t3); 
 
 	printf("Others time (ms):\t\t %zu\n", other_time);
 	printf("Total time (ms):\t\t %zu\n", total_recv_time);

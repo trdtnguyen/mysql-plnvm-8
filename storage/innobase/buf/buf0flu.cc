@@ -1125,6 +1125,10 @@ static void buf_flush_write_block_low(buf_page_t *bpage, buf_flush_t flush_type,
 
   /* Force the log to the disk before writing the modified block */
   if (!srv_read_only_mode) {
+#if defined (UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PL) || defined (UNIV_SKIPLOG)
+		//Since the log records are persist in NVM we don't need to follow WAL rule
+		//Skip flush log here
+#else //original 
     const lsn_t flush_to_lsn = bpage->newest_modification;
 
     /* Do the check before calling log_write_up_to() because in most
@@ -1139,6 +1143,7 @@ static void buf_flush_write_block_low(buf_page_t *bpage, buf_flush_t flush_type,
 
       MONITOR_INC_WAIT_STATS_EX(MONITOR_ON_LOG_, _PAGE_WRITTEN, wait_stats);
     }
+#endif //UNIV_PMEMOBJ_LOG
   }
 
   switch (buf_page_get_state(bpage)) {

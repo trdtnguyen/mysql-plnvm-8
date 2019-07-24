@@ -415,7 +415,7 @@ struct recv_sys_t {
                          std::equal_to<page_no_t>>;
 
 #if defined (UNIV_TRACE_RECOVERY_TIME)
-	ulint		redo1_time;
+	ulint		recv_extra_apply_time; //elapse time for apply log records occured in phase 1
 #endif //UNIV_TRACE_RECOVERY_TIME
 
   /** Every space has its own heap and pages that belong to it. */
