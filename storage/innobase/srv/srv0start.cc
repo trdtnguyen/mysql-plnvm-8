@@ -3563,3 +3563,50 @@ void srv_fatal_error() {
 
   exit(3);
 }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+
+/*
+ * Close log files and release resource when the server close
+ * */
+void
+pm_close_and_free_log_files(
+		PMEM_PAGE_PART_LOG*	ppl) 
+{
+	bool ret;
+	uint64_t i, n;
+	fil_node_t* node;
+
+	n = ppl->n_buckets;
+
+	//fil_node, follow the logic of fil_node_close_file() and fil_space_free_low()
+	for (i = 0; i < n; i++){
+		node = ppl->node_arr[i];
+
+		if (node->is_open){
+			ret = os_file_close(node->handle);
+			ut_a(ret);
+			node->is_open = false;
+		}
+		node->space = NULL;
+
+		os_event_destroy(node->sync_event);
+		ut_free(node->name);
+		node->name = NULL;
+		node->handle.m_psi = NULL;
+
+		free(ppl->node_arr[i]);
+	}
+	free (ppl->node_arr);
+
+	//space
+	ut_free(ppl->log_space->name);
+	free (ppl->log_space);
+	
+	//group
+	for (i = 0; i < n; i++){
+		pm_log_group_free(ppl->log_groups[i]);
+	}
+	ut_free(ppl->log_groups);
+}
+#endif //UNIV_PMEMOBJ_PART_PL
