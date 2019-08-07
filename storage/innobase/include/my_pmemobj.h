@@ -970,7 +970,8 @@ struct __pmem_log_group {
 	uint64_t	file_size;
 	uint64_t	space_id;
 
-	log_group_state_t		state;
+	//log_group_state_t		state;
+	log_state_t		state;
 
 	/** lsn used to fix coordinates within the log group */
 	lsn_t				lsn;

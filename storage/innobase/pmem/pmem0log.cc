@@ -4081,7 +4081,8 @@ pm_log_group_init(
 	group->format = LOG_HEADER_FORMAT_CURRENT;
 	group->file_size = file_size;
 	group->space_id = space_id;
-	group->state = LOG_GROUP_OK;
+	//group->state = LOG_GROUP_OK; //MySQL 5.7
+	group->state = log_state_t::OK; //MySQL 8.0
 	group->lsn = LOG_START_LSN;
 	group->lsn_offset = LOG_FILE_HDR_SIZE;
 
