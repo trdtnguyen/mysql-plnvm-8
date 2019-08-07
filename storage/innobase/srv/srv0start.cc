@@ -118,6 +118,13 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "ut0crc32.h"
 #include "ut0new.h"
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+#include <libpmem.h>
+#include <libpmemobj.h>
+#include "my_pmemobj.h"
+#endif // UNIV_PMEMOBJ_PART_PL
+
+
 /** fil_space_t::flags for hard-coded tablespaces */
 extern uint32_t predefined_flags;
 

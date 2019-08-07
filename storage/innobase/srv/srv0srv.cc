@@ -106,6 +106,11 @@ bool srv_downgrade_logs = false;
 bool srv_upgrade_old_undo_found = false;
 #endif /* INNODB_DD_TABLE */
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+#endif
+
 /* The following is the maximum allowed duration of a lock wait. */
 ulint srv_fatal_semaphore_wait_threshold = 600;
 

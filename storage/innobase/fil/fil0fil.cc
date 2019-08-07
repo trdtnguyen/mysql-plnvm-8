@@ -84,6 +84,12 @@ The tablespace memory cache */
 #include <tuple>
 #include <unordered_map>
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmem_common.h"
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+#endif //UNIV_PMEMOBJ_PART_PL
+
 using Dirs = std::vector<std::string>;
 using Space_id_set = std::set<space_id_t>;
 
@@ -7632,6 +7638,7 @@ dberr_t fil_io(const IORequest &type, bool sync, const page_id_t &page_id,
                        message));
 }
 
+
 /** If the tablespace is on the unflushed list and there are no pending
 flushes then remove from the unflushed list.
 @param[in,out]	space		Tablespace to remove */
@@ -10733,3 +10740,172 @@ void Fil_path::convert_to_lower_case(std::string &path) {
 }
 
 #endif /* !UNIV_HOTBACKUP */
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*Additional functions for PPL*/
+
+/*
+ * Write log buffer to disk use Linux AIO
+ * */
+void
+pm_log_fil_io(
+	PMEMobjpool*			pop,
+	PMEM_PAGE_PART_LOG*		ppl,
+	PMEM_PAGE_LOG_BUF*		plogbuf
+	)
+{
+
+	PMEM_LOG_GROUP*		group;
+
+	byte*		pdata;
+	byte*		log_src;
+
+	ulint		start_offset;
+	ulint		end_offset;
+
+	ulint		next_offset;
+	ulint		write_offset;
+
+	ulint		len;
+	ulint		i;
+	
+	fil_space_t*	space;
+	fil_node_t*		node;
+
+	//ulint	mode; //MySQL 5.7
+	AIO_mode mode; // MySQL 8.0
+
+	IORequest		req_type(IORequestLogWrite);
+	dberr_t	err;
+
+	//mode = OS_AIO_LOG; //MySQL 5.7
+	mode = AIO_mode::LOG;
+
+	//pointer to the src logbuf	
+	pdata = ppl->p_align;
+	log_src = pdata + plogbuf->pmemaddr;
+
+	start_offset = 0;
+	end_offset = plogbuf->size;
+
+	//(1) Align the offset with the page size
+	
+	len = plogbuf->size;
+	ut_ad(len > 0);
+	
+	assert(plogbuf->hashed_id >= 0);	
+	
+	group = ppl->log_groups[plogbuf->hashed_id];
+	
+	/*if the previous AIO is not finish while this AIO happen, write_diskaddr < diskaddr. 
+	 * Otherwise, write_diskaddr == diskaddr. 
+	 * So we write from diskaddr to avoid overwirte on previous written
+	 * Since we advanced diskaddr size-bytes when handling full pline, we write from the previous size bytes from diskaddr
+	 * */
+	
+	//next_offset = pline->write_diskaddr
+	next_offset = plogbuf->diskaddr;
+
+	//(2) Write, simulate log_group_write_buf()
+	assert((end_offset % univ_page_size.physical()) == 0);	
+	//ut_ad(len % OS_FILE_LOG_BLOCK_SIZE == 0);
+
+	space = ppl->log_space;
+	node = ppl->node_arr[plogbuf->hashed_id];
+	
+	//open node if not
+	if (!node->is_open) {
+		bool success;
+		node->handle = os_file_create(
+				innodb_log_file_key, node->name, OS_FILE_OPEN,
+				OS_FILE_AIO, OS_LOG_FILE, false, &success);	   
+		if (!success){
+			printf("Cannot open log file %s handle %zu\n", node->name, node->handle);
+		}
+		node->is_open = true;
+	}
+	
+	/*if a log group is full, we extend it to double size*/
+	if (next_offset + len > group->file_size){
+		float size_temp = (group->file_size * 1.0) / (1024 * 1024);
+		//printf("PMEM_INFO log file of line %zu is full, extend it from %f MB to %f MB\n", 
+		//		plogbuf->hashed_id, size_temp, size_temp * 2);
+		//assert(0);
+		bool ret = os_file_truncate(
+			   	node->name,
+				node->handle,
+			   	group->file_size * 2);
+		if (!ret){
+			printf("PMEM_ERROR cannot extend log file of line %zu \n", plogbuf->hashed_id);	
+			assert(0);
+		}
+
+		group->file_size = group->file_size * 2;
+
+	}
+	// Call Async IO	
+	err = os_aio(
+		req_type,
+		mode, node->name, node->handle,
+	   	log_src, next_offset, len,
+		srv_read_only_mode,
+		node, plogbuf);
+
+}
+
+/*
+ * Read part log file to buffer use Linux AIO when recovery
+ * Follow the logic of log_group_read_log_seq()
+ * Just simple open the file (if need) and read the read_len bytes from read_offset
+ * return: number bytes read
+ * */
+dberr_t
+pm_log_fil_read(
+	PMEMobjpool*			pop,
+	PMEM_PAGE_PART_LOG*		ppl,
+	PMEM_PAGE_LOG_HASHED_LINE*		pline,
+	byte* buf,
+	uint64_t read_offset,
+	uint64_t read_len
+	)
+{
+	PMEM_LOG_GROUP*		group;
+
+	fil_space_t*	space;
+	fil_node_t*		node;
+
+	//ulint	mode;
+	AIO_mode	mode;
+	IORequest		req_type(IORequestLogRead);
+	dberr_t	err;
+
+	//read log with AIO_SYNC
+	//mode = OS_AIO_SYNC; //MySQL 5.7
+	mode = AIO_mode::SYNC; //MySQL 8.0
+
+	group = ppl->log_groups[pline->hashed_id];
+
+
+	space = ppl->log_space;
+	node = ppl->node_arr[pline->hashed_id];
+	if (!node->is_open) {
+		bool success;
+		node->handle = os_file_create(
+				innodb_log_file_key, node->name, OS_FILE_OPEN,
+				OS_FILE_AIO, OS_LOG_FILE, false, &success);	   
+		if (!success){
+			printf("Cannot open log file %s handle %zu\n", node->name, node->handle);
+		}
+		node->is_open = true;
+	}
+
+	err = os_aio(
+		req_type,
+		mode, node->name, node->handle,
+	   	buf, read_offset, read_len,
+		srv_read_only_mode,
+		node, D_RW(pline->logbuf));
+
+	return err;
+}
+#endif //UNIV_PMEMOBJ_PART_PL

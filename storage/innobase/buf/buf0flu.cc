@@ -63,6 +63,15 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "ut0byte.h"
 #include "ut0stage.h"
 
+#if defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_PART_PL)
+#include <sys/syscall.h>
+//#include <sys/types.h> //for gettid()
+#include "my_pmemobj.h"
+#include <libpmemobj.h>
+extern PMEM_WRAPPER* gb_pmw;
+static const int buf_flusher_priority = -20;
+#endif /* UNIV_PMEMOBJ_BUF */
+
 #ifdef UNIV_LINUX
 /* include defs for CPU time priority settings */
 #include <sys/resource.h>
@@ -3612,6 +3621,151 @@ mysql_pfs_key_t pm_log_redoer_thread_key;
 #endif /* UNIV_PFS_THREAD */
 
 //Defined in my_pmemobj.h
+/////////// FLUSHER /////////////////////
+/*
+ * Init flusher
+ * @param[in] size: number of items in the array
+ * */
+PMEM_LOG_FLUSHER*
+pm_log_flusher_init(
+				const size_t	size,
+				FLUSHER_TYPE	type) {
+	PMEM_LOG_FLUSHER* flusher;
+	ulint i;
+
+	flusher = static_cast <PMEM_LOG_FLUSHER*> (
+			ut_zalloc_nokey(sizeof(PMEM_LOG_FLUSHER)));
+
+	flusher->type = type;
+
+	mutex_create(LATCH_ID_PM_LOG_FLUSHER, &flusher->mutex);
+
+	flusher->is_log_req_not_empty = os_event_create("flusher_is_log_req_not_empty");
+	flusher->is_log_req_full = os_event_create("flusher_is_log_req_full");
+	flusher->is_log_all_finished = os_event_create("flusher_is_log_all_finished");
+	flusher->is_log_all_closed = os_event_create("flusher_is_log_all_closed");
+	flusher->size = size;
+	flusher->tail = 0;
+	flusher->n_requested = 0;
+	flusher->is_running = false;
+
+		
+	//flush array
+	flusher->flush_list_arr = static_cast <PMEM_PAGE_LOG_BUF**> (	calloc(size, sizeof(PMEM_PAGE_LOG_BUF*)));
+	for (i = 0; i < size; i++) {
+		flusher->flush_list_arr[i] = NULL;
+	}	
+
+	return flusher;
+}
+
+void
+pm_log_flusher_close(
+		PMEM_LOG_FLUSHER*	flusher) {
+	ulint i;
+	
+	//wait for all workers finish their work
+	while (flusher->n_workers > 0) {
+		os_thread_sleep(10000);
+	}
+	
+	switch (flusher->type){
+		case CATCHER_LOG_BUF:
+			break;
+		case FLUSHER_LOG_BUF:
+		default:
+			//free flush list
+			for (i = 0; i < flusher->size; i++) {
+				if (flusher->flush_list_arr[i]){
+					flusher->flush_list_arr[i] = NULL;
+				}
+			}	
+			if (flusher->flush_list_arr){
+				free(flusher->flush_list_arr);
+				flusher->flush_list_arr = NULL;
+			}	
+			break;
+	} //end switch(flusher->type)
+
+
+	mutex_destroy(&flusher->mutex);
+
+	os_event_destroy(flusher->is_log_req_not_empty);
+	os_event_destroy(flusher->is_log_req_full);
+	//os_event_destroy(buf->flusher->is_flush_full);
+
+	os_event_destroy(flusher->is_log_all_finished);
+	os_event_destroy(flusher->is_log_all_closed);
+	//printf("destroys mutex and events ok\n");	
+
+	if(flusher){
+		flusher = NULL;
+		free(flusher);
+	}
+	//printf("free flusher ok\n");
+}
+void pm_log_flusher_worker() {
+
+	ulint i;
+
+	PMEM_LOG_FLUSHER* flusher = gb_pmw->ppl->flusher;
+
+	PMEM_PAGE_LOG_BUF* plogbuf = NULL;
+
+	my_thread_init();
+
+	mutex_enter(&flusher->mutex);
+	flusher->n_workers++;
+	os_event_reset(flusher->is_log_all_closed);
+	mutex_exit(&flusher->mutex);
+
+	/*thread's work*/
+	while (true) {
+		//worker thread wait until there is is_requested signal 
+		os_event_wait(flusher->is_log_req_not_empty);
+		//looking for a full list in wait-list and flush it
+		mutex_enter(&flusher->mutex);
+		if (flusher->n_requested > 0) {
+			for (i = 0; i < flusher->size; i++) {
+				plogbuf = flusher->flush_list_arr[i];
+				if (plogbuf != NULL)
+				{
+					//***this call aio_batch ***
+					pm_log_flush_log_buf(gb_pmw->pop, gb_pmw->ppl, plogbuf);
+					flusher->n_requested--;
+					os_event_set(flusher->is_log_req_full);
+					//we can set the pointer to null after the pm_buf_flush_list finished
+					flusher->flush_list_arr[i] = NULL;
+					break;
+				}
+			}
+
+		} //end if flusher->n_requested > 0
+
+		if (flusher->n_requested == 0) {
+			if (buf_page_cleaner_is_active) {
+				//buf_page_cleaner is running, start waiting
+				os_event_reset(flusher->is_log_req_not_empty);
+			}
+			else {
+				mutex_exit(&flusher->mutex);
+				break;
+			}
+		}
+		mutex_exit(&flusher->mutex);
+	} //end while thread
+	/*Thread exit*/
+	mutex_enter(&flusher->mutex);
+	flusher->n_workers--;
+	if (flusher->n_workers == 0) {
+		printf("The last log worker is closing\n");
+		//os_event_set(flusher->is_all_closed);
+	}
+	mutex_exit(&flusher->mutex);
+
+	my_thread_end();
+}
+
 #endif // UNIV_PMEMOBJ_PART_PL
 
 #endif /* UNIV_HOTBACKUP */
