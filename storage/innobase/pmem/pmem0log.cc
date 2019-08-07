@@ -1600,7 +1600,8 @@ pm_ppl_write_rec(
 	byte* temp;
 	
 	mlog_id_t type;
-	ulint space, page_no;
+	uint32_t space, page_no; //MySQL 8.0
+	//ulint space, page_no; //MySQL 5.7
 	uint16_t check_size;
 	
 	uint64_t rec_lsn;
@@ -1959,7 +1960,8 @@ pm_ppl_write_rec_v2(
 	byte* temp;
 	
 	mlog_id_t type;
-	ulint space, page_no;
+	uint32_t space, page_no; //MySQL 8.0
+	//ulint space, page_no; //MySQL 5.7
 	uint16_t check_size;
 	
 	uint64_t rec_lsn;
@@ -2209,7 +2211,8 @@ pm_ppl_write_rec_old(
 	byte* temp;
 	
 	mlog_id_t type;
-	ulint space, page_no;
+	uint32_t space, page_no; //MySQL 8.0
+	//ulint space, page_no; //MySQL 5.7
 	uint16_t check_size;
 	
 	uint64_t rec_lsn;
@@ -3165,7 +3168,8 @@ __pm_write_log_buf(
 	byte* temp;
 
 	mlog_id_t type;
-	ulint space, page_no;
+	uint32_t space, page_no; //MySQL 8.0
+	//ulint space, page_no; //MySQL 5.7
 	uint16_t check_size;
 
 	PMEM_PAGE_LOG_HASHED_LINE*	pline;

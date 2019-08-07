@@ -3603,4 +3603,15 @@ void FlushObserver::flush() {
     }
   }
 }
+/////////////////////// PART LOG IMPLEMENT/////////////
+#if defined (UNIV_PMEMOBJ_PART_PL)
+
+#ifdef UNIV_PFS_THREAD
+mysql_pfs_key_t pm_log_flusher_thread_key;
+mysql_pfs_key_t pm_log_redoer_thread_key;
+#endif /* UNIV_PFS_THREAD */
+
+//Defined in my_pmemobj.h
+#endif // UNIV_PMEMOBJ_PART_PL
+
 #endif /* UNIV_HOTBACKUP */

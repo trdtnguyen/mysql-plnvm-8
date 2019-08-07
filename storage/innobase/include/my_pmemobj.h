@@ -742,7 +742,7 @@ struct __pmem_recv_line {
 	ulint			n_read_done; /*number of read request in phase 2 REDO */
 
 	recv_dblwr_t	dblwr;
-	encryption_list_t* encryption_list;
+	//encryption_list_t* encryption_list;
 
 	/*statistic info*/
 	ulint		redo1_thread_id;
@@ -838,15 +838,16 @@ pm_log_fil_read(
 	uint64_t offset,
 	uint64_t len
 	);
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_log_flusher_coordinator)(
-		void* arg);
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_log_flusher_worker)(
-		void* arg);
+/*MySQL 8.0 doesn't use DECLARE_THREAD macro. Just define your function as normal*/
+void pm_log_flusher_worker();
+
+// MySQL 5.7
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_log_flusher_worker)(
+//		void* arg);
+
 ////////////////     END FLUSHER   /////////////////
 
 ////////////////    REDOER   /////////////////
@@ -882,15 +883,19 @@ pm_log_redoer_init(
 void
 pm_log_redoer_close(PMEM_LOG_REDOER*	redoer);
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_log_redoer_coordinator)(
-		void* arg);
+/*MySQL 8.0 doesn't use DECLARE_THREAD macro. Just define your function as normal*/
+void pm_log_redoer_worker();
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_log_redoer_worker)(
-		void* arg);
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_log_redoer_coordinator)(
+//		void* arg);
+//
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_log_redoer_worker)(
+//		void* arg);
+
 ////////////////    END REDOER   /////////////////
 
 /*Transaction Table Entry*/
@@ -2463,25 +2468,32 @@ pm_lc_sleep_if_needed(
 	ulint		next_loop_time,
 	int64_t		sig_count);
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_buf_flush_list_cleaner_coordinator)(
-		void* arg);
+/*MySQL 8.0 doesn't use DECLARE_THREAD macro. Just define your function as normal*/
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_buf_flush_list_cleaner_worker)(
-		void* arg);
+void pm_buf_flush_list_cleaner_coordinator();
+void pm_buf_flush_list_cleaner_worker();
+void pm_flusher_coordinator();
+void pm_flusher_worker();
 
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_flusher_coordinator)(
-		void* arg);
-
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(pm_flusher_worker)(
-		void* arg);
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_buf_flush_list_cleaner_coordinator)(
+//		void* arg);
+//
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_buf_flush_list_cleaner_worker)(
+//		void* arg);
+//
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_flusher_coordinator)(
+//		void* arg);
+//
+//extern "C"
+//os_thread_ret_t
+//DECLARE_THREAD(pm_flusher_worker)(
+//		void* arg);
 
 
 #ifdef UNIV_DEBUG
