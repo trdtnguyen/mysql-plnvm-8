@@ -624,6 +624,10 @@ static PSI_mutex_info all_innodb_mutexes[] = {
     PSI_MUTEX_KEY(page_sys_arch_client_mutex, 0, 0, PSI_DOCUMENT_ME),
     PSI_MUTEX_KEY(page_zip_stat_per_index_mutex, 0, 0, PSI_DOCUMENT_ME),
     PSI_MUTEX_KEY(page_cleaner_mutex, 0, 0, PSI_DOCUMENT_ME),
+#if defined (UNIV_PMEMOBJ_PART_PL)
+    PSI_MUTEX_KEY(pm_log_flusher_mutex, 0, 0, PSI_DOCUMENT_ME),
+    PSI_MUTEX_KEY(pm_log_redoer_mutex, 0, 0, PSI_DOCUMENT_ME),
+#endif
     PSI_MUTEX_KEY(purge_sys_pq_mutex, 0, 0, PSI_DOCUMENT_ME),
     PSI_MUTEX_KEY(recv_sys_mutex, 0, 0, PSI_DOCUMENT_ME),
     PSI_MUTEX_KEY(recv_writer_mutex, 0, 0, PSI_DOCUMENT_ME),
@@ -716,6 +720,10 @@ static PSI_thread_info all_innodb_threads[] = {
     PSI_KEY(log_flusher_thread, 0, 0, PSI_DOCUMENT_ME),
     PSI_KEY(log_write_notifier_thread, 0, 0, PSI_DOCUMENT_ME),
     PSI_KEY(log_flush_notifier_thread, 0, 0, PSI_DOCUMENT_ME),
+#if defined (UNIV_PMEMOBJ_PART_PL)
+    PSI_KEY(pm_log_flusher_thread, 0, 0, PSI_DOCUMENT_ME),
+    PSI_KEY(pm_log_redoer_thread, 0, 0, PSI_DOCUMENT_ME),
+#endif
     PSI_KEY(recv_writer_thread, 0, 0, PSI_DOCUMENT_ME),
     PSI_KEY(srv_error_monitor_thread, 0, 0, PSI_DOCUMENT_ME),
     PSI_KEY(srv_lock_timeout_thread, 0, 0, PSI_DOCUMENT_ME),
