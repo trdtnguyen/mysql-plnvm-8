@@ -2304,6 +2304,14 @@ static void srv_master_do_active_tasks(void) {
   }
 
   srv_update_cpu_usage();
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  //check for PPL checkpoint
+  if (gb_pmw->ppl->max_oldest_lsn > gb_pmw->ppl->ckpt_lsn )
+  {
+	  //TODO: 
+	  //pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);	
+  }
+#endif //UNIV_PMEMOBJ_PART_PL
 
   if (cur_time % SRV_MASTER_DICT_LRU_INTERVAL == 0) {
     srv_main_thread_op_info = "enforcing dict cache limit";

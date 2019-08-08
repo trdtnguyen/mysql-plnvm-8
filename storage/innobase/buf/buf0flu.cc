@@ -897,6 +897,17 @@ void buf_flush_write_complete(buf_page_t *bpage) {
   mutex_exit(&buf_pool->flush_state_mutex);
 
   buf_dblwr_update(bpage, flush_type);
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	//we only call pm_ppl_flush_page when the flushed page is persist on storage
+	pm_ppl_flush_page(
+			gb_pmw->pop, gb_pmw, gb_pmw->ppl,
+			bpage,
+			bpage->id.space(),
+			bpage->id.page_no(),
+			bpage->id.fold(),
+			bpage->newest_modification);
+
+#endif //UNIV_PMEMBOJ_PART_PL
 }
 #endif /* !UNIV_HOTBACKUP */
 
@@ -3299,6 +3310,11 @@ thread_exit:
 
   buf_page_cleaner_is_active = false;
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  //wake up the sleeping threads to close them
+
+  os_event_set(gb_pmw->ppl->flusher->is_log_req_not_empty);
+#endif
   my_thread_end();
 }
 
@@ -3375,6 +3391,48 @@ void buf_flush_request_force(lsn_t lsn_limit) {
 
   os_event_set(buf_flush_event);
 }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+void
+pm_ppl_buf_flush_recv_note_modification(
+	PMEMobjpool*		pop,
+	PMEM_PAGE_PART_LOG*	ppl,
+	buf_block_t*    block,
+	lsn_t       start_lsn,
+	lsn_t       end_lsn) 
+{
+	buf_page_mutex_enter(block);
+
+	block->page.newest_modification = end_lsn;
+	if (!block->page.oldest_modification) {
+		buf_pool_t*	buf_pool = buf_pool_from_block(block);
+
+		buf_flush_insert_sorted_into_flush_list(
+			buf_pool, block, start_lsn);
+	} else {
+		ut_ad(block->page.oldest_modification <= start_lsn);
+	}
+
+	buf_page_mutex_exit(block);
+}
+/*
+ *Called by pm_ppl_checkpoint()
+ * */
+void
+pm_ppl_buf_flush_request_force(
+	uint64_t	lsn_limit)
+{
+	lsn_t lsn_target = lsn_limit;
+
+	mutex_enter(&page_cleaner->mutex);
+	if (lsn_target > buf_flush_sync_lsn) {
+		buf_flush_sync_lsn = lsn_target;
+	}
+	mutex_exit(&page_cleaner->mutex);
+	os_event_set(buf_flush_event);
+}
+#endif //UNIV_PMEMOBJ_PART_PL
+
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
 
 /** Functor to validate the flush list. */

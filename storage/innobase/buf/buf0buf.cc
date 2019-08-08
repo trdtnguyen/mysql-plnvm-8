@@ -5103,7 +5103,14 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
                                  "the page, read in are "
                               << page_id_t(read_space_id, read_page_no)
                               << ", should be " << bpage->id;
-    }
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  printf("PMEM_ERROR in buf_page_io_complete, input (space %zu, page_no %zu) differ read (space %zu, page_no %zu)\n", bpage->id.space(), bpage->id.page_no(), read_space_id, read_page_no);
+
+	  //goto skip_recv_page;
+	  goto skip_checksum;
+	  //assert(0);
+#endif
+	}
 
     compressed_page = Compression::is_compressed_page(frame);
 
@@ -5121,6 +5128,10 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
           << "that is not supported by this instance";
     }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+		//we don't use checksum from page_lsn 
+		goto skip_checksum;
+#endif
     /* From version 3.23.38 up we store the page checksum
     to the 4 first bytes of the page end lsn field */
     bool is_corrupted;
@@ -5174,6 +5185,9 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       }
     }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+skip_checksum:
+#endif
     DBUG_EXECUTE_IF("buf_page_import_corrupt_failure", page_not_corrupt
                     : bpage = bpage;);
 
