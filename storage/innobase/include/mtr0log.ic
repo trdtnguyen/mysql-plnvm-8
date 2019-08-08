@@ -37,6 +37,226 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "mysqld_error.h"
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+
+/*
+If cur_off + size > limit size then call realloc to extend the buffer
+*/
+UNIV_INLINE
+byte*
+mlog_open(
+	mtr_t*	mtr,
+	ulint	size)
+{
+	mtr->set_modified();
+
+	if (mtr_get_log_mode(mtr) == MTR_LOG_NONE
+	    || mtr_get_log_mode(mtr) == MTR_LOG_NO_REDO) {
+
+		return(NULL);
+	}
+	
+	return (mtr->open_buf(size));
+}
+
+/*Closes a buffer
+Set the cur_off to the ptr
+The ptr must greater than the cur_off (only move forward)
+*/
+UNIV_INLINE
+void
+mlog_close(
+	mtr_t*	mtr,	/*!< in: mtr */
+	byte*	ptr)	/*!< in: buffer space from ptr up was not used */
+{
+	ut_ad(mtr_get_log_mode(mtr) != MTR_LOG_NONE);
+	ut_ad(mtr_get_log_mode(mtr) != MTR_LOG_NO_REDO);
+	
+	//update offset
+	byte* begin_ptr = mtr->get_buf();
+
+	uint32_t new_off = ptr - begin_ptr;
+	
+	ut_ad(new_off < mtr->get_max_buf_size());
+	
+	//we only increase the offset in mlog_close()
+	ut_ad(mtr->get_cur_off() <= new_off);
+
+	mtr->set_cur_off(new_off);
+}
+
+/** Writes a log record about an operation.
+@param[in]	type		redo log record type
+@param[in]	space_id	tablespace identifier
+@param[in]	page_no		page number
+@param[in,out]	log_ptr		current end of mini-transaction log
+@param[in,out]	mtr		mini-transaction
+@return	end of mini-transaction log */
+UNIV_INLINE
+byte*
+mlog_write_initial_log_record_low(
+	mlog_id_t		type,
+	space_id_t		space_id,
+	page_no_t		page_no,
+	byte*			log_ptr,
+	mtr_t*			mtr)
+{
+
+	
+	byte*		begin_log_ptr;
+	uint16_t	off0;	
+	uint16_t	off1;	
+	uint64_t	key;	
+	//uint64_t	lsn;
+
+	ib_uint32_t n_recs;
+	uint32_t	rec_size;
+	
+	n_recs = mtr->get_n_recs();
+
+	begin_log_ptr = mtr->get_buf();
+	assert(log_ptr >= begin_log_ptr);
+	
+	//save current off	
+	off0 = (log_ptr - begin_log_ptr);
+	mtr->add_off(off0);
+	
+	//compute size for previous log rec	
+
+	if (n_recs > 0){
+		uint16_t prev_off = mtr->get_off_at(n_recs - 1); 
+		uint16_t prev_len_off = mtr->get_len_off_at(n_recs - 1); 
+
+		assert(off0 > prev_off);
+
+		rec_size = off0 - prev_off ;
+		if (rec_size > UINT16_MAX){
+			printf("PMEM_ERROR: rec_size %u is larger than UINT16MAX %u\n", rec_size, UINT16_MAX);
+			assert(0);
+		}
+
+		mach_write_to_2(begin_log_ptr + prev_len_off, rec_size);
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+		mtr->add_size_at(rec_size, n_recs - 1);
+#endif
+		//new in DAL (Direct Add Log), add the previous log rec to PPL
+		uint64_t prev_key = mtr->get_key_at(n_recs - 1);
+		uint64_t rec_lsn;
+
+		rec_lsn = mtr->add_rec_to_ppl(prev_key, begin_log_ptr + prev_off, rec_size);
+		mtr->add_LSN_at(rec_lsn, n_recs - 1);
+	}
+	else {
+		//this is the first log rec in the mtr, do nothing
+	}
+
+	//write type, space, page as original code
+	mach_write_to_1(log_ptr, type);
+	log_ptr++;
+
+	log_ptr += mach_write_compressed(log_ptr, space_id);
+	log_ptr += mach_write_compressed(log_ptr, page_no);
+
+	//save offset of "rec_len" field
+	off1 = (log_ptr - begin_log_ptr);
+	mtr->add_len_off(off1);
+
+	/*reserve 2-byte for rec len, we write it later in the next call of this
+	function or at mtr::execute for the last log rec */
+	log_ptr += 2;
+	
+	/*reserve 8-byte for LSN, we write it later when log recs are written to PPL partition log buffer */
+	//lsn = ut_time_us(NULL);
+	//mtr->add_LSN(lsn);
+	//mach_write_to_8(log_ptr, lsn);
+	log_ptr += 8;
+
+	//We compute the key as InnoDB 
+	key = (space_id << 20) + space_id + page_no;
+	mtr->add_key(key);
+
+	//add info 
+	
+	/*below code is used for validation (debug only)*/
+	
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+	mtr->add_type(type);
+	mtr->add_space(space_id);
+	mtr->add_page(page_no);
+#endif
+	
+
+	mtr->added_rec();
+	return(log_ptr);
+}
+
+/*Catenates 1 - 4 bytes to the mtr log. The value is not compressed. */
+UNIV_INLINE
+void
+mlog_catenate_ulint(
+/*================*/
+	mtr_buf_t*	mtr_buf,	/*!< in/out: buffer to write */
+	ulint		val,		/*!< in: value to write */
+	mlog_id_t	type)		/*!< in: type of value to write */
+{
+	//we don't use this function
+	assert(0);
+}
+
+/* PPL FUNCTION
+Catenates 1 - 4 bytes to the mtr log. The value is not compressed.
+This function use push instead of open_log and close_log 
+*/
+UNIV_INLINE
+void
+mlog_catenate_ulint(
+	mtr_t*	mtr,	/*!< in/out: mtr */
+	ulint		val,		/*!< in: value to write */
+	mlog_id_t	type)		/*!< in: type of value to write */
+{
+	ut_ad(MLOG_1BYTE == 1);
+	ut_ad(MLOG_2BYTES == 2);
+	ut_ad(MLOG_4BYTES == 4);
+	ut_ad(MLOG_8BYTES == 8);
+
+	if (mtr_get_log_mode(mtr) == MTR_LOG_NONE
+	    || mtr_get_log_mode(mtr) == MTR_LOG_NO_REDO) {
+
+		return;
+	}
+
+	//byte*	ptr = mtr_buf->push<byte*>(type);
+	
+	//check full as in open
+	uint32_t size = type;
+
+    byte* ptr = mtr->open_buf(size);
+
+	uint32_t cur_off = mtr->get_cur_off();
+	
+	switch (type) {
+	case MLOG_4BYTES:
+		mach_write_to_4(ptr, val);
+		break;
+	case MLOG_2BYTES:
+		mach_write_to_2(ptr, val);
+		break;
+	case MLOG_1BYTE:
+		mach_write_to_1(ptr, val);
+		break;
+	default:
+		ut_error;
+	}
+
+	//increase the offset equal to number of written bytes	
+	mtr->set_cur_off(cur_off + size);	
+}
+
+#else //Originals
+//////////////////////////////////////////////////////////
+
 /** Opens a buffer to mlog. It must be closed with mlog_close.
 @param[in,out]	mtr	mtr
 @param[in]	size	buffer size in bytes; MUST be smaller than
@@ -54,17 +274,6 @@ byte *mlog_open(mtr_t *mtr, ulint size) {
   return (mtr->get_log()->open(size));
 }
 
-/** Opens a buffer to mlog. It must be closed with mlog_close.
-This is used for writing log for metadata changes
-@param[in,out]	mtr	mtr
-@param[in]	size	buffer size in bytes; MUST be smaller than
-                        DYN_ARRAY_DATA_SIZE!
-@return buffer */
-UNIV_INLINE
-byte *mlog_open_metadata(mtr_t *mtr, ulint size) {
-  return (mtr->get_log()->open(size));
-}
-
 /** Closes a buffer opened to mlog. */
 UNIV_INLINE
 void mlog_close(mtr_t *mtr, /*!< in: mtr */
@@ -76,6 +285,28 @@ void mlog_close(mtr_t *mtr, /*!< in: mtr */
   mtr->get_log()->close(ptr);
 }
 
+/** Writes a log record about an operation.
+@param[in]	type		redo log record type
+@param[in]	space_id	tablespace identifier
+@param[in]	page_no		page number
+@param[in,out]	log_ptr		current end of mini-transaction log
+@param[in,out]	mtr		mini-transaction
+@return	end of mini-transaction log */
+UNIV_INLINE
+byte *mlog_write_initial_log_record_low(mlog_id_t type, space_id_t space_id,
+                                        page_no_t page_no, byte *log_ptr,
+                                        mtr_t *mtr) {
+  ut_ad(type <= MLOG_BIGGEST_TYPE);
+
+  mach_write_to_1(log_ptr, type);
+  log_ptr++;
+
+  log_ptr += mach_write_compressed(log_ptr, space_id);
+  log_ptr += mach_write_compressed(log_ptr, page_no);
+
+  mtr->added_rec();
+  return (log_ptr);
+}
 /** Catenates 1 - 4 bytes to the mtr log. The value is not compressed. */
 UNIV_INLINE
 void mlog_catenate_ulint(mtr_buf_t *mtr_buf, /*!< in/out: buffer to write */
@@ -117,6 +348,21 @@ void mlog_catenate_ulint(
   }
 
   mlog_catenate_ulint(mtr->get_log(), val, type);
+}
+#endif // UNIV_PMEMOBJ_PART_PL
+/////////////////////////////////////////////////////////////
+////////////////////////////// We reused below functions /////////////////
+////////////////////////////////////////////////////////////////
+
+/** Opens a buffer to mlog. It must be closed with mlog_close.
+This is used for writing log for metadata changes
+@param[in,out]	mtr	mtr
+@param[in]	size	buffer size in bytes; MUST be smaller than
+                        DYN_ARRAY_DATA_SIZE!
+@return buffer */
+UNIV_INLINE
+byte *mlog_open_metadata(mtr_t *mtr, ulint size) {
+  return (mtr->get_log()->open(size));
 }
 
 /** Catenates a compressed ulint to mlog. */
@@ -181,28 +427,6 @@ byte *mlog_write_initial_dict_log_record(mlog_id_t type, table_id_t id,
   return (log_ptr);
 }
 
-/** Writes a log record about an operation.
-@param[in]	type		redo log record type
-@param[in]	space_id	tablespace identifier
-@param[in]	page_no		page number
-@param[in,out]	log_ptr		current end of mini-transaction log
-@param[in,out]	mtr		mini-transaction
-@return	end of mini-transaction log */
-UNIV_INLINE
-byte *mlog_write_initial_log_record_low(mlog_id_t type, space_id_t space_id,
-                                        page_no_t page_no, byte *log_ptr,
-                                        mtr_t *mtr) {
-  ut_ad(type <= MLOG_BIGGEST_TYPE);
-
-  mach_write_to_1(log_ptr, type);
-  log_ptr++;
-
-  log_ptr += mach_write_compressed(log_ptr, space_id);
-  log_ptr += mach_write_compressed(log_ptr, page_no);
-
-  mtr->added_rec();
-  return (log_ptr);
-}
 
 #ifndef UNIV_HOTBACKUP
 /** Writes the initial part of a log record (3..11 bytes).

@@ -53,7 +53,16 @@ void mlog_catenate_string(mtr_t *mtr,      /*!< in: mtr */
     return;
   }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	//get the end of buf and extend if need
+	byte* ptr = mtr->open_buf(len);
+	::memmove(ptr, str, len);
+
+	mtr->set_cur_off(mtr->get_cur_off() + len);
+   	
+#else
   mtr->get_log()->push(str, ib_uint32_t(len));
+#endif //UNIV_PMEMOBJ_PART_PL
 }
 
 #ifndef UNIV_HOTBACKUP
@@ -549,6 +558,10 @@ byte *mlog_parse_index(byte *ptr,            /*!< in: buffer */
 
   if (comp) {
     if (end_ptr < ptr + 4) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  //strickly assert for debugging
+	  assert(0);
+#endif
       return (NULL);
     }
     n = mach_read_from_2(ptr);
@@ -571,6 +584,10 @@ byte *mlog_parse_index(byte *ptr,            /*!< in: buffer */
     ptr += 2;
     ut_ad(n_uniq <= n);
     if (end_ptr < ptr + n * 2) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  //strickly assert for debugging
+	  assert(0);
+#endif
       return (NULL);
     }
   } else {
