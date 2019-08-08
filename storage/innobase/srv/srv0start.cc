@@ -122,6 +122,10 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include <libpmem.h>
 #include <libpmemobj.h>
 #include "my_pmemobj.h"
+
+char  PMEM_FILE_PATH [PMEM_MAX_FILE_NAME_LENGTH];
+extern PMEM_WRAPPER* gb_pmw;
+pfs_os_file_t gb_dbw_file;
 #endif // UNIV_PMEMOBJ_PART_PL
 
 
@@ -1891,7 +1895,7 @@ dberr_t srv_start(bool create_new_db, const std::string &scan_directories) {
   ulint other_time;
   ulint total_recv_time;		
 
-  ulint start_tem1, end_tem1, start_tem2, end_tem2;
+  ulint start_tem1, end_tem1;
 
   start_recv_time = end_recv_time = 
 	  start_redo1_time = end_redo1_time =
@@ -2345,6 +2349,17 @@ dberr_t srv_start(bool create_new_db, const std::string &scan_directories) {
   }
 
   ut_a(log_sys != nullptr);
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/* We create or open PMEM part log files here */
+	
+	pm_create_or_open_part_log_files(
+			gb_pmw->ppl,
+			logfilename,
+			dirnamelen,
+			logfile0);
+
+#endif //UNIV_PMEMOBJ_PART_PL
 
   /* Open all log files and data files in the system
   tablespace: we keep them open until database shutdown.
@@ -3566,6 +3581,202 @@ void srv_fatal_error() {
 
 #if defined (UNIV_PMEMOBJ_PART_PL)
 
+/*
+ * Create all part-log files if they are not exist
+ * Only call this function when the server start
+ * */
+dberr_t
+pm_create_or_open_part_log_files(
+		PMEM_PAGE_PART_LOG*	ppl,
+		char*   logfilename,
+		size_t  dirnamelen,
+		char*&  logfile0)
+{
+	dberr_t err;
+	uint64_t i;
+	uint64_t n_log_files = ppl->n_log_files_per_bucket * ppl->n_buckets;
+
+	uint64_t n_log_files_found = n_log_files;
+
+	
+	ppl->node_arr = static_cast<fil_node_t**> (calloc(ppl->n_buckets, sizeof(fil_node_t*)));
+	
+	for (i = 0; i < ppl->n_buckets; i++){
+		ppl->node_arr[i] = static_cast<fil_node_t*> (malloc(sizeof(fil_node_t)));
+	}
+
+	ppl->log_space = static_cast<fil_space_t*> (malloc(sizeof(fil_space_t)));
+
+	if (ppl->is_new){
+		// (1) Create files, see create_log_files()
+		ib::info() << "Setting part-log file size to "
+			<< (srv_ppl_log_file_size >> (20 - UNIV_PAGE_SIZE_SHIFT))
+			<< " MB";
+		ib::info() << "Start creating " << n_log_files << " part-log files ...";
+
+		for (i = 0; i < n_log_files; i++) {
+			sprintf(logfilename + dirnamelen,
+					"pl_logfile%zu", i);
+			err = pm_create_log_file(
+					&ppl->log_files[i],
+				   	logfilename,
+					srv_ppl_log_file_size);
+
+			if (err != DB_SUCCESS) {
+				return(err);
+			}
+		}
+
+		ib::info() << "End creating " << n_log_files << "part-log files  ...";
+	}
+	else {
+		// Open files
+		for (i = 0; i < n_log_files; i++) {
+			os_offset_t	size;
+			sprintf(logfilename + dirnamelen,
+				"pl_logfile%zu", i);
+			err = open_log_file(&ppl->log_files[i], logfilename, &size);
+			//err = open_log_file(&files[i], logfilename, &size);
+			if (err != DB_SUCCESS) {
+				printf("PMEM open log file\n");
+				assert(0);
+				return DB_ERROR;
+			}
+
+			ut_a(size != (os_offset_t) -1);
+			if (size & ((1 << UNIV_PAGE_SIZE_SHIFT) - 1)) {
+
+				ib::error() << "Log file " << logfilename
+					<< " size " << size << " is not a"
+					" multiple of innodb_page_size";
+				assert(0);
+				return DB_ERROR;
+			}
+		} //end for each log files
+		n_log_files_found = i;
+	}
+	
+	// (2) Create the log_space and add it to fil_system_t's hashtable
+	/* MySQL 5.7: PMEM_LOG_SPACE_FIRST_ID = SRV_LOG_SPACE_FIRST_ID + 1
+	 * MySQL 5.8: dict_sys_t::s_log_space_first_id defined in dict0dict.h
+	*/
+	fil_space_t*	log_space = fil_space_create(
+		"pl_redo_log",
+	   	dict_sys_t::s_log_space_first_id,
+		fsp_flags_set_page_size(0, univ_page_size),
+		FIL_TYPE_LOG);
+	//ut_a(fil_validate()); //MySQL 5.7
+	ut_ad(fil_validate()); //MySQL 8.0
+	ut_a(log_space != NULL);
+	
+	//copy struct, we want our log_space work independently with the InnoDB spaces
+	ppl->log_space->id = log_space->id;
+	ppl->log_space->name = mem_strdup(log_space->name);
+	ppl->log_space->purpose = log_space->purpose;
+	ppl->log_space->flags = log_space->flags;
+	ppl->log_space->magic_n = FIL_SPACE_MAGIC_N;
+	ppl->log_space->encryption_type = Encryption::NONE;
+	//rw_lock_create(fil_space_latch_key, &ppl->log_space->latch, SYNC_FSP);
+	
+	/*In MySQL 8.0, a vector is used instead of list. fil_space_t::files replace */
+	//UT_LIST_INIT(ppl->log_space->chain, &fil_node_t::chain);
+
+	// (3) Create the fil_nodes	
+	
+	for (i = 0; i < n_log_files_found; i++) {
+		sprintf(logfilename + dirnamelen, "pl_logfile%zu", i);
+		fil_node_t* node;
+		node = pm_log_fil_node_create( logfilename, srv_ppl_log_file_size,
+				ppl->log_space, false, false, PAGE_NO_MAX);
+
+		//save the fil_node 
+		//ppl->node_arr[i] = node;	
+
+		ppl->node_arr[i]->space = ppl->log_space;
+		//update file handle
+		//if (ppl->node_arr[i]->handle.m_file != ppl->log_files[i].m_file) {
+		//	ppl->log_files[i].m_file = ppl->node_arr[i]->handle.m_file;
+		//}
+		ppl->node_arr[i]->handle = ppl->log_files[i];
+		ppl->node_arr[i]->is_open = false;
+
+		ppl->node_arr[i]->name =  mem_strdup(node->name);
+		ppl->node_arr[i]->sync_event = os_event_create("fsync_event");
+		ppl->node_arr[i]->is_raw_disk = false;
+
+		ppl->node_arr[i]->size = node->size;
+		ppl->node_arr[i]->magic_n = FIL_NODE_MAGIC_N;
+		ppl->node_arr[i]->max_size = node->max_size;
+
+	}
+	
+	//(4) Create log group for each bucket
+	ppl->log_groups = static_cast<PMEM_LOG_GROUP**>(
+			ut_zalloc_nokey(sizeof(PMEM_LOG_GROUP*) * ppl->n_buckets));
+
+	/* MySQL 5.7: PMEM_LOG_SPACE_FIRST_ID = SRV_LOG_SPACE_FIRST_ID + 1
+	 * MySQL 5.8: dict_sys_t::s_log_space_first_id defined in dict0dict.h
+	*/
+	for (i = 0; i < ppl->n_buckets; i++){
+		ppl->log_groups[i] = pm_log_group_init(
+				i, 
+				ppl->n_log_files_per_bucket,
+				srv_ppl_log_file_size * UNIV_PAGE_SIZE,
+				dict_sys_t::s_log_space_first_id
+				//PMEM_LOG_SPACE_FIRST_ID
+				);
+	}
+	
+	//(5) open and keep pmem log files opened until shutdown
+	//fil_open_log_and_system_tablespace_files();
+
+	return (DB_SUCCESS);
+}
+/*
+ * Create the part-log files for each bucket 
+ * We write our own function because the create_log_file() in InnoDB create a 4GB log file that is too large for part-log 
+ *	*/
+dberr_t
+pm_create_log_file(
+/*============*/
+	pfs_os_file_t*	file,	/*!< out: file handle */
+	const char*	name,
+	uint64_t log_file_size)	/*!< in: log file name */
+{
+
+	bool		ret;
+
+	*file = os_file_create(
+			innodb_log_file_key, name,
+			OS_FILE_CREATE|OS_FILE_ON_ERROR_NO_EXIT, OS_FILE_NORMAL,
+			OS_LOG_FILE, srv_read_only_mode, &ret);
+
+	if (!ret) {
+		ib::error() << "Cannot create " << name;
+		return(DB_ERROR);
+	}
+	/*MySQL 5.7
+	ret = os_file_set_size(name, *file,
+			(os_offset_t) log_file_size
+			<< UNIV_PAGE_SIZE_SHIFT,
+			srv_read_only_mode);
+	*/
+	/*MySQL 8.0*/
+	ret = os_file_set_size(name, *file, 0,
+			(os_offset_t) log_file_size
+			<< UNIV_PAGE_SIZE_SHIFT,
+			srv_read_only_mode, true);
+	if (!ret) {
+		ib::error() << "Cannot set log file " << name << " to size "
+			<< (log_file_size >> (20 - UNIV_PAGE_SIZE_SHIFT))
+			<< " MB";
+		return(DB_ERROR);
+	}
+	ret = os_file_close(*file);
+	ut_a(ret);
+
+	return(DB_SUCCESS);
+}
 /*
  * Close log files and release resource when the server close
  * */

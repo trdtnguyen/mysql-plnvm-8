@@ -1779,11 +1779,27 @@ pm_create_log_file(
 //	const char*	name,
 //	uint64_t new_size);
 
+/*MySQL 5.7
 fil_node_t*
 pm_log_fil_node_create(
-	const char*	name,
-	ulint		size,
+	const char*		name,
+	ulint			size,
 	fil_space_t*	space);
+*/
+
+/*MySQL 8.0 Create the fil_node for partition log files
+@param[in] name		file name
+@param[in] size		file size
+@param[in] space	log space, in PL-NVM, we use different space with InnoDB log space
+ * */
+fil_node_t*
+pm_log_fil_node_create(
+	const char*		name,
+	ulint			size,
+	fil_space_t*	space,
+	bool			is_raw,
+	bool			atomic_write,
+	ulint			max_pages);
 /////////////// END LOG FILES ///////////
 
 //Statistic 

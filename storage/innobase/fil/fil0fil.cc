@@ -10745,6 +10745,40 @@ void Fil_path::convert_to_lower_case(std::string &path) {
 /*Additional functions for PPL*/
 
 /*
+ * Create fil_node by name. Inspired by fil_node_create().
+ * We create our own function because we want the return value is fil_node_t
+ * Open the file and assign file handle 
+MySQL 8.0 Create the fil_node for partition log files
+@param[in] name		file name
+@param[in] size		file size
+@param[in] space	log space, in PL-NVM, we use different space with InnoDB log space
+ * */
+fil_node_t*
+pm_log_fil_node_create(
+	const char*		name,
+	ulint			size,
+	fil_space_t*	space,
+	bool			is_raw,
+	bool			atomic_write,
+	ulint			max_pages)
+{
+	fil_node_t* node;
+	auto shard = fil_system->shard_by_id(space->id);
+	
+	node = shard->create_node(name, size, space, is_raw,
+                            IORequest::is_punch_hole_supported(), atomic_write,
+                            max_pages);
+
+	if (!node->name){
+		ib::error()
+			<< "Cannot create file node for log file "
+			<< name;
+		assert(0);
+		return NULL;
+	}
+	return node;
+}
+/*
  * Write log buffer to disk use Linux AIO
  * */
 void
@@ -10764,10 +10798,10 @@ pm_log_fil_io(
 	ulint		end_offset;
 
 	ulint		next_offset;
-	ulint		write_offset;
+	//ulint		write_offset;
 
 	ulint		len;
-	ulint		i;
+	//ulint		i;
 	
 	fil_space_t*	space;
 	fil_node_t*		node;
@@ -10827,7 +10861,7 @@ pm_log_fil_io(
 	
 	/*if a log group is full, we extend it to double size*/
 	if (next_offset + len > group->file_size){
-		float size_temp = (group->file_size * 1.0) / (1024 * 1024);
+		//float size_temp = (group->file_size * 1.0) / (1024 * 1024);
 		//printf("PMEM_INFO log file of line %zu is full, extend it from %f MB to %f MB\n", 
 		//		plogbuf->hashed_id, size_temp, size_temp * 2);
 		//assert(0);
