@@ -207,7 +207,8 @@ static void page_zip_compress_write_log(
 
   ut_ad(!dict_index_is_ibuf(index));
 
-  log_ptr = mlog_open(mtr, 11 + 2 + 2);
+  //log_ptr = mlog_open(mtr, 11 + 2 + 2);
+  log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 2);
 
   if (!log_ptr) {
     return;
@@ -1945,7 +1946,8 @@ void page_zip_write_blob_ptr(
 
   if (mtr) {
 #ifndef UNIV_HOTBACKUP
-    byte *log_ptr = mlog_open(mtr, 11 + 2 + 2 + BTR_EXTERN_FIELD_REF_SIZE);
+    //byte *log_ptr = mlog_open(mtr, 11 + 2 + 2 + BTR_EXTERN_FIELD_REF_SIZE);
+    byte *log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 2 + BTR_EXTERN_FIELD_REF_SIZE);
     if (UNIV_UNLIKELY(!log_ptr)) {
       return;
     }
@@ -2073,7 +2075,8 @@ void page_zip_write_node_ptr(
 
   if (mtr) {
 #ifndef UNIV_HOTBACKUP
-    byte *log_ptr = mlog_open(mtr, 11 + 2 + 2 + REC_NODE_PTR_SIZE);
+    //byte *log_ptr = mlog_open(mtr, 11 + 2 + 2 + REC_NODE_PTR_SIZE);
+    byte *log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 2 + REC_NODE_PTR_SIZE);
     if (UNIV_UNLIKELY(!log_ptr)) {
       return;
     }
@@ -2518,7 +2521,8 @@ void page_zip_write_header_log(
     ulint length,     /*!< in: length of the data */
     mtr_t *mtr)       /*!< in: mini-transaction */
 {
-  byte *log_ptr = mlog_open(mtr, 11 + 1 + 1);
+  //byte *log_ptr = mlog_open(mtr, 11 + 1 + 1);
+  byte *log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 1 + 1);
   ulint offset = page_offset(data);
 
   ut_ad(offset < PAGE_DATA);

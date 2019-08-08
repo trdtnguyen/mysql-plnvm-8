@@ -46,6 +46,16 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "trx0purge.h"
 #endif /* !UNIV_HOTBACKUP */
 
+#if defined (UNIV_TRACE_FLUSH_TIME)
+extern volatile int64 gb_write_log_time;
+extern volatile int64 gb_n_write_log;
+#endif
+
+#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_PMEMOBJ_WAL_ELR) || defined(UNIV_PMEMOBJ_WAL)
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw; 
+#endif /* UNIV_PMEMOBJ_PART_PL */
+
 static_assert(static_cast<int>(MTR_MEMO_PAGE_S_FIX) ==
                   static_cast<int>(RW_S_LATCH),
               "");
@@ -441,6 +451,28 @@ void mtr_t::start(bool sync, bool read_only) {
   m_impl.m_flush_observer = NULL;
 
   ut_d(m_impl.m_magic_n = MTR_MAGIC_N);
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  m_impl.key_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
+  m_impl.LSN_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
+  m_impl.off_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
+  m_impl.len_off_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+  m_impl.space_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
+  m_impl.page_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
+  m_impl.size_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
+  m_impl.type_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
+#endif //UNIV_PMEMOBJ_VALID_MTR
+
+  //ulint max_init_size = 16384;	
+  //ulint max_init_size = 8192;	//debug OK
+  //ulint max_init_size = 4096;	
+  //ulint max_init_size = 1024;	// for Linkbench
+  ulint max_init_size = 512;	// original value
+
+  m_impl.buf = (byte*) calloc(max_init_size, sizeof(byte));
+  m_impl.cur_off = 0;
+  m_impl.max_buf_size = max_init_size;
+#endif //UNIV_PMEMOBJ_PART_PL
 }
 
 /** Release the resources */
@@ -461,6 +493,20 @@ void mtr_t::Command::release_resources() {
   m_impl->m_log.erase();
 
   m_impl->m_memo.erase();
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	free(m_impl->key_arr);
+	free(m_impl->LSN_arr);
+	free(m_impl->off_arr);
+	free(m_impl->len_off_arr);
+	free(m_impl->buf);
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+	free(m_impl->space_arr);
+	free(m_impl->page_arr);
+	free(m_impl->size_arr);
+	free(m_impl->type_arr);
+#endif //UNIV_PMEMOBJ_VALID_MTR
+#endif // UNIV_PMEMOBJ_PART_PL
 
   m_impl->m_state = MTR_STATE_COMMITTED;
 
@@ -621,6 +667,254 @@ void mtr_t::Command::add_dirty_blocks_to_flush_list(lsn_t start_lsn,
   m_impl->m_memo.for_each_block_in_reverse(iterator);
 }
 
+#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIPLOG)
+
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+/*This function used in debugging PL-NVM
+ *
+ * */
+void
+mtr_t::pmem_check_mtrlog(mtr_t* mtr)
+{
+	ulint n_recs;
+	ulint len;
+	ulint i;
+
+	mlog_id_t type;
+	mlog_id_t check_type;
+
+	byte* begin_ptr;
+	byte* ptr;
+	byte* temp_ptr;
+	byte* end_ptr;
+
+	ulint parsed_len;
+	ulint check_len;
+
+	ulint parsed_lsn;
+	ulint check_lsn;
+
+	ulint n_parsed;
+	ulint space_no, page_no;
+	byte* body;
+
+	ulint check_space, check_page;
+
+	n_recs	= m_impl.m_n_log_recs;
+
+	n_parsed = 0;
+	i = 0;	
+
+	ptr = mtr->get_buf();
+	end_ptr = mtr->open_buf(0);	
+
+	while (ptr < end_ptr){
+		if (*ptr == MLOG_MULTI_REC_END){
+			ptr++;
+			continue;
+		}
+
+		assert(i < n_recs);
+
+		check_type = (mlog_id_t) m_impl.type_arr[i];
+		check_space = m_impl.space_arr[i];
+		check_page = m_impl.page_arr[i]; 
+		check_len = m_impl.size_arr[i];
+
+		temp_ptr = mlog_parse_initial_log_record(ptr, end_ptr, &type, &space_no, &page_no);
+
+		if (check_type != type ||
+			check_space != space_no ||
+			check_page != page_no ||
+			type >= MLOG_BIGGEST_TYPE
+			){
+
+			printf("ERROR: parsed type %zu space %zu page %zu are differ to CHECK type %zu space %zu page %zu\n", type, space_no, page_no, check_type, check_space, check_page);
+			assert(0);
+
+		}
+		//now check rec_len field
+		parsed_len = mach_read_from_2(temp_ptr);
+		
+		if (parsed_len != check_len){
+			printf("ERROR: parsed len %zu differ to check len %zu\n ", parsed_len, check_len);
+			assert(0);
+		}
+		temp_ptr += 2;
+		//skip the rec_lsn
+		temp_ptr += 8;
+		
+		if ( (temp_ptr - ptr) == parsed_len){
+			/*empty body rec*/
+			if (type != MLOG_INIT_FILE_PAGE2
+					&& type != MLOG_COMP_PAGE_CREATE 
+					&& type != MLOG_IBUF_BITMAP_INIT
+					&& type != MLOG_UNDO_ERASE_END){
+				printf("pm_check_mtrlog() ERROR: empty body rec has type %zu is not valid!\n", type);
+				assert(0);
+			}
+		}
+
+		//check for MLOG_COMP_LIST_END_COPY_CREATED (type == 45) 
+		if (type == 45){
+			//read the log_data_len to check whether it != 0
+			// parse 2 + 2 + (n * 2) bytes
+			dict_index_t*   index = NULL;
+			byte* temp_ptr2 = mlog_parse_index(temp_ptr, end_ptr, 1, &index);
+			ulint log_data_len = mach_read_from_4(temp_ptr2);
+			//if (log_data_len == 0){
+			//	printf("mtr::exec ERROR log_data_len is ZERO mtr %zu log_ptr %zu type %zu space %zu page %zu\n", mtr, temp_ptr2, type, space_no, page_no);
+			//	assert(log_data_len);
+			//}
+			//else{
+			//	printf("mtr::exec OK log_data_len  %zu mtr %zu log_ptr %zu type %zu space %zu page %zu\n", log_data_len, mtr, temp_ptr2, type, space_no, page_no);
+
+			//}
+
+			temp_ptr2 += 4;
+
+			if (log_data_len + (temp_ptr2 - ptr) != check_len){
+				printf("mtr::exec ERROR  mtr %zu log_ptr %zu  type 45 error, the_first %zu + log_data_len %zu differ to check_len %zu\n", mtr, (temp_ptr2 - 4), (temp_ptr2-ptr), log_data_len, check_len);
+				assert(0);
+			}
+			else{
+				//printf("mtr::exec OK mtr %zu type %zu space %zu page %zu the first %zu log_data_len %zu \n", mtr, type, space_no, page_no, (temp_ptr2-ptr), log_data_len);
+			}
+		}
+		ptr += parsed_len;
+		i++;
+	}//end while
+	
+}
+#endif // UNIV_PMEMOBJ_VALID_MTR
+#endif // UNIV_PMEMOBJ_PART_PL || UNIV_SKIPLOG
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*
+ * Directly add log rec to PPL
+ * @param[in]: key - the fold value of space and page_no
+ * @param[in]: src - log src
+ * @param[in]: size - log rec size
+ * */
+uint64_t mtr_t::add_rec_to_ppl(
+		uint64_t	key,
+	   	byte*		log_src,
+	   	uint32_t	rec_size)
+{
+	return pm_ppl_write_rec(gb_pmw->pop, gb_pmw, gb_pmw->ppl, key, log_src, rec_size);
+}
+#endif // UNIV_PMEMOBJ_PART_PL
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+
+/*Case 1: PL-NVM*/
+
+void mtr_t::Command::execute() {
+  ut_ad(m_impl->m_log_mode != MTR_LOG_NONE);
+
+  ulint len;
+  fil_space_t*	space;
+
+  byte* begin_ptr;
+
+  uint16_t	n_recs;
+  uint16_t	prev_off;
+  uint16_t	prev_len_off;
+  uint16_t	rec_size;
+  uint64_t	prev_key;
+
+  lsn_t start_lsn;
+  lsn_t end_lsn;
+
+  mtr_t*			mtr;
+
+  mtr = m_impl->m_mtr;
+  begin_ptr = mtr->get_buf();
+
+  len	= mtr->get_cur_off();
+  n_recs	= m_impl->m_n_log_recs;
+
+  /////////////////////////////////////////////////
+  // begin simulate Command::prepare_write()
+  /////////////////////////////////////////////////
+  /*simulate the lsn 
+   * start lsn is the smallest lsn in the LSN_arr
+   * end_lsn is the largest lsn in the LSN_arr
+   * */
+
+  switch (m_impl->m_log_mode) {
+    case MTR_LOG_SHORT_INSERTS:
+      ut_ad(0);
+      /* fall through (write no redo log) */
+    case MTR_LOG_NO_REDO:
+    case MTR_LOG_NONE:
+      ut_ad(m_impl->m_log.size() == 0);
+      len =  0;
+    case MTR_LOG_ALL:
+      break;
+  }
+  /*We don't append either MLOG_SINGLE_REC_FLAG or MLOG_MULTI_REC_END to m_impl_m_log*/
+
+  /*end simulated Commad::prepare_write()*/
+
+  if (len > 0) {
+	  /*write REDO logs from mtr to partition logs in NVM*/
+	//(2) Compute "rec_len" for the last log rec 
+	prev_off = mtr->get_off_at(n_recs - 1);
+
+	rec_size = len - prev_off ;
+
+	assert(rec_size > 0);
+
+	prev_len_off = mtr->get_len_off_at(n_recs - 1); 
+
+	mach_write_to_2(begin_ptr + prev_len_off, rec_size);
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+	mtr->add_size_at(rec_size, n_recs - 1);
+#endif	
+
+	prev_key = mtr->get_key_at(n_recs - 1);	
+	
+	/*single-entry call to add REDO logs to PL-NVM*/
+	end_lsn = mtr->add_rec_to_ppl(prev_key, begin_ptr + prev_off, rec_size);
+
+	mtr->add_LSN_at(end_lsn, n_recs - 1);
+	
+	start_lsn = mtr->get_LSN_at(0);
+
+	/* TODO:
+	if (len > 0){
+		if (was_clean){
+			space->max_lsn = m_end_lsn;
+		}
+	}
+	*/
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+	//(3) Check, remove this section in run mode
+	mtr->pmem_check_mtrlog(mtr);
+#endif		
+
+	/*update pageLSN and add dirty pages to flush list
+	 * this call replace release_blocks() in MySQL 5.7
+	 */
+    add_dirty_blocks_to_flush_list(start_lsn, end_lsn);
+
+	m_impl->m_mtr->m_commit_lsn = end_lsn;
+
+  } else {
+    DEBUG_SYNC_C("mtr_noredo_before_add_dirty_blocks");
+
+    add_dirty_blocks_to_flush_list(0, 0);
+  }
+	
+  /*release resources*/
+  release_all();
+  release_resources();
+}
+#else //original
+
 /** Write the redo log record, add dirty pages to the flush list and release
 the resources. */
 void mtr_t::Command::execute() {
@@ -666,6 +960,7 @@ void mtr_t::Command::execute() {
   release_all();
   release_resources();
 }
+#endif //UNIV_PMEMOBJ_PART_PL
 
 #ifndef UNIV_HOTBACKUP
 #ifdef UNIV_DEBUG

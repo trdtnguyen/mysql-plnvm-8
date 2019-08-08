@@ -3924,7 +3924,8 @@ static void fil_op_write_log(mlog_id_t type, space_id_t space_id,
 
   byte *log_ptr;
 
-  log_ptr = mlog_open(mtr, 11 + 4 + 2 + 1);
+  //log_ptr = mlog_open(mtr, 11 + 4 + 2 + 1);
+  log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 4 + 2 + 1);
 
   if (log_ptr == nullptr) {
     /* Logging in mtr is switched off during crash recovery:

@@ -75,13 +75,15 @@ void trx_undof_page_add_undo_rec_log(
   const byte *log_end;
   ulint len;
 
-  log_ptr = mlog_open(mtr, 11 + 13 + MLOG_BUF_MARGIN);
+  //log_ptr = mlog_open(mtr, 11 + 13 + MLOG_BUF_MARGIN);
+  log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 13 + MLOG_BUF_MARGIN);
 
   if (log_ptr == NULL) {
     return;
   }
 
-  log_end = &log_ptr[11 + 13 + MLOG_BUF_MARGIN];
+  //log_end = &log_ptr[11 + 13 + MLOG_BUF_MARGIN];
+  log_end = &log_ptr[MLOG_HEADER_SIZE + 13 + MLOG_BUF_MARGIN];
   log_ptr = mlog_write_initial_log_record_fast(undo_page, MLOG_UNDO_INSERT,
                                                log_ptr, mtr);
   len = new_free - old_free - 4;

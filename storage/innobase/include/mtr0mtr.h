@@ -46,6 +46,13 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "srv0srv.h"
 #include "trx0types.h"
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*11 bytes as original InnoDB + 2 bytes rec_len + 8 bytes rec_lsn*/
+#define MLOG_HEADER_SIZE (11 + 2 + 8)
+#else
+#define MLOG_HEADER_SIZE 11
+#endif //UNIV_PMEMOBJ_PART_PL
+
 /** Start a mini-transaction. */
 #define mtr_start(m) (m)->start()
 
@@ -169,6 +176,28 @@ struct mtr_memo_slot_t {
 struct mtr_t {
   /** State variables of the mtr */
   struct Impl {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/*Injected data from PL-NVM inside the mtr_t*/
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+		uint64_t* page_arr;
+		uint64_t* space_arr;
+		uint64_t* size_arr;
+		uint16_t* type_arr;
+#endif //UNIV_PMEMOBJ_VALID_MTR
+
+		uint64_t* LSN_arr;
+		uint64_t* key_arr;
+		uint16_t* off_arr; //offset of the previous log rec
+		uint16_t* len_off_arr; //offset from the size_arr[i] to the "len" location in mlog_write_initial_log_record_low
+
+		bool	is_undo_page; //redo log for UNDO page
+		//we use a normal dynamic buffer
+		byte*		buf;
+		uint32_t    cur_off; //curent offset in the log buf
+		uint32_t	max_buf_size; //max size (extendable)
+#endif //UNIV_PMEMOBJ_PART_PL
+
     /** memo stack for locks etc. */
     mtr_buf_t m_memo;
 
@@ -457,6 +486,119 @@ struct mtr_t {
   @return true if the mtr is dirtying a clean page. */
   static bool is_block_dirtied(const buf_block_t *block)
       MY_ATTRIBUTE((warn_unused_result));
+
+#if defined (UNIV_PMEMOBJ_PL)
+  uint64_t add_rec_to_ppl(
+		  uint64_t key,
+		  byte* src,
+		  uint32_t size);
+
+  byte* get_buf(){
+	  return (m_impl.buf);
+  }
+  void set_buf(byte* ptr){
+	  m_impl.buf = ptr;
+  }
+
+  /* 
+   * check and extend current buf if it is not fit with size
+   * This funciton does not change the current offset
+   * Reallocation may cause a bug if a old pointer still point to the odd address
+   *
+   * return the pointer to the end of extended buf*/
+  byte* open_buf(uint32_t size){
+	  uint32_t new_size;
+	  uint32_t cur_max_size;
+	  byte* new_ptr;
+
+	  cur_max_size = m_impl.max_buf_size;
+	  if (m_impl.cur_off + size > cur_max_size){
+
+		  new_size = ((size / cur_max_size) + 2) * cur_max_size;
+		  new_ptr = (byte*) realloc(m_impl.buf, new_size);
+		  //if (m_impl.buf != new_ptr){
+		  //	printf("mtr::open_buf() reallocate from %zu to %zu\n", m_impl.buf, new_ptr);
+		  //}
+		  m_impl.buf = new_ptr;
+
+		  m_impl.max_buf_size = new_size;
+	  }
+
+	  return (m_impl.buf + m_impl.cur_off);
+  }
+
+  uint32_t get_cur_off() {
+	  return (m_impl.cur_off);
+  }
+  void set_cur_off(uint32_t val) {
+	  m_impl.cur_off = val;
+  }
+  void add_off(uint16_t off){
+	  m_impl.off_arr[m_impl.m_n_log_recs] = off;
+  }
+  uint16_t get_off_at(uint32_t i){
+	  assert(i < m_impl.m_n_log_recs);
+	  return(m_impl.off_arr[i]);
+  }
+
+  uint32_t get_max_buf_size() {
+	  return (m_impl.max_buf_size);
+  }
+  void set_max_buf_size(uint32_t val) {
+	  m_impl.max_buf_size = val;
+  }
+  ib_uint32_t get_n_recs(){
+	  return (m_impl.m_n_log_recs);
+  }
+  void add_key(uint64_t key){
+	  m_impl.key_arr[m_impl.m_n_log_recs] = key;
+  }
+  uint64_t get_key_at(uint32_t i){
+	  assert(i < m_impl.m_n_log_recs);
+	  return (m_impl.key_arr[i]);
+  }
+
+  void add_LSN(uint64_t LSN){
+	  m_impl.LSN_arr[m_impl.m_n_log_recs] = LSN;
+  }
+  void add_LSN_at(uint64_t LSN, uint32_t i){
+	  assert(i < m_impl.m_n_log_recs);
+	  m_impl.LSN_arr[i] = LSN;
+  }
+  uint64_t get_LSN_at(uint32_t i){
+	  return m_impl.LSN_arr[i];
+  }
+  void add_len_off(uint16_t len_off){
+	  m_impl.len_off_arr[m_impl.m_n_log_recs] = len_off;
+  }
+  uint16_t get_len_off_at(uint32_t i){
+	  assert(i < m_impl.m_n_log_recs);
+	  return(m_impl.len_off_arr[i]);
+  }
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+  void pmem_check_mtrlog(mtr_t* mtr);
+
+  void add_size_at(uint64_t size, uint32_t i){
+	  m_impl.size_arr[i] = size;
+  }
+  uint64_t get_size_at(uint32_t i){
+	  assert(i >= 0 && i < m_impl.m_n_log_recs);
+	  return (m_impl.size_arr[i]);
+  }
+  void add_space(uint64_t space_no){
+	  m_impl.space_arr[m_impl.m_n_log_recs] = space_no;
+  }
+  void add_page(uint64_t page_no){
+	  m_impl.page_arr[m_impl.m_n_log_recs] = page_no;
+  }
+  void add_type(uint16_t type){
+	  m_impl.type_arr[m_impl.m_n_log_recs] = type;
+  }
+#endif // define (UNIV_PMEMOBJ_VALID_MTR)
+  bool is_new_block(){
+	  return (get_log()->get_back()->used() == 0);
+  }
+#endif // UNIV_PMEMOBJ_PART_PL
 
  private:
   Impl m_impl;

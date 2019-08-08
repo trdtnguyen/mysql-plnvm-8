@@ -950,7 +950,8 @@ static void page_cur_insert_rec_write_log(
         return;
       }
     } else {
-      log_ptr = mlog_open(mtr, 11 + 2 + 5 + 1 + 5 + 5 + MLOG_BUF_MARGIN);
+      //log_ptr = mlog_open(mtr, 11 + 2 + 5 + 1 + 5 + 5 + MLOG_BUF_MARGIN);
+      log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 5 + 1 + 5 + 5 + MLOG_BUF_MARGIN);
       if (UNIV_UNLIKELY(!log_ptr)) {
         /* Logging in mtr is switched off
         during crash recovery: in that case

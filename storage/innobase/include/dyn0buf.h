@@ -329,6 +329,25 @@ class dyn_buf_t {
     return (true);
   }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/**
+	@return the next block */
+	block_t* next(block_t* block)
+		MY_ATTRIBUTE((warn_unused_result))
+	{
+		ut_ad(UT_LIST_GET_LEN(m_list) > 0);
+		if (block == NULL){
+			return NULL;
+		}
+
+		return(UT_LIST_GET_NEXT(m_node, block));
+	}
+
+	block_t* get_back(){
+		return (UT_LIST_GET_LAST(m_list));
+	}
+#endif //UNIV_PMEMOBJ_PART_PL
+
   /**
   @return the first block */
   block_t *front() MY_ATTRIBUTE((warn_unused_result)) {

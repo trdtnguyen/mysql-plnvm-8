@@ -72,7 +72,8 @@ void mlog_write_initial_log_record(
   ut_ad(type <= MLOG_BIGGEST_TYPE);
   ut_ad(type > MLOG_8BYTES);
 
-  log_ptr = mlog_open(mtr, 11);
+  //log_ptr = mlog_open(mtr, 11);
+  log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE);
 
   /* If no logging is requested, we may return now */
   if (log_ptr == NULL) {
@@ -267,7 +268,8 @@ void mlog_write_ulint(
   }
 
   if (mtr != 0) {
-    byte *log_ptr = mlog_open(mtr, 11 + 2 + 5);
+    //byte *log_ptr = mlog_open(mtr, 11 + 2 + 5);
+    byte *log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 5);
 
     /* If no logging is requested, we may return now */
 
@@ -293,7 +295,8 @@ void mlog_write_ull(byte *ptr,       /*!< in: pointer where to write */
   mach_write_to_8(ptr, val);
 
   if (mtr != 0) {
-    byte *log_ptr = mlog_open(mtr, 11 + 2 + 9);
+    //byte *log_ptr = mlog_open(mtr, 11 + 2 + 9);
+    byte *log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + 2 + 9);
 
     /* If no logging is requested, we may return now */
     if (log_ptr != 0) {
@@ -422,17 +425,20 @@ byte *mlog_open_and_write_index(
   ut_ad(!!page_rec_is_comp(rec) == dict_table_is_comp(index->table));
 
   if (!page_rec_is_comp(rec)) {
-    log_start = log_ptr = mlog_open(mtr, 11 + size);
+    //log_start = log_ptr = mlog_open(mtr, 11 + size);
+    log_start = log_ptr = mlog_open(mtr, MLOG_HEADER_SIZE + size);
     if (!log_ptr) {
       return (NULL); /* logging is disabled */
     }
     log_ptr = mlog_write_initial_log_record_fast(rec, type, log_ptr, mtr);
-    log_end = log_ptr + 11 + size;
+    //log_end = log_ptr + 11 + size;
+    log_end = log_ptr + MLOG_HEADER_SIZE + size;
   } else {
     bool instant = index->has_instant_cols();
     ulint i;
     ulint n = dict_index_get_n_fields(index);
-    ulint total = 11 + (instant ? 2 : 0) + size + (n + 2) * 2;
+    //ulint total = 11 + (instant ? 2 : 0) + size + (n + 2) * 2;
+    ulint total = MLOG_HEADER_SIZE + (instant ? 2 : 0) + size + (n + 2) * 2;
     ulint alloc = total;
 
     if (alloc > mtr_buf_t::MAX_DATA_SIZE) {

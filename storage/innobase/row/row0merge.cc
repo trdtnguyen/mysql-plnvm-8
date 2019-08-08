@@ -3453,7 +3453,8 @@ static void row_merge_write_redo(const dict_index_t *index) {
 
   ut_ad(!index->table->is_temporary());
   mtr.start();
-  log_ptr = mlog_open(&mtr, 11 + 8);
+  //log_ptr = mlog_open(&mtr, 11 + 8);
+  log_ptr = mlog_open(&mtr, MLOG_HEADER_SIZE + 8);
   log_ptr = mlog_write_initial_log_record_low(MLOG_INDEX_LOAD, index->space,
                                               index->page, log_ptr, &mtr);
   mach_write_to_8(log_ptr, index->id);
