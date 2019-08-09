@@ -50,6 +50,12 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "srv0start.h"
 #include "trx0sys.h"
 
+#if defined (UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmemobj.h"
+#include <libpmemobj.h>
+extern PMEM_WRAPPER* gb_pmw;
+#endif /* UNIV_PMEMOBJ_BUF */
+
 /** There must be at least this many pages in buf_pool in the area to start
 a random read-ahead */
 #define BUF_READ_AHEAD_RANDOM_THRESHOLD(b) (5 + BUF_READ_AHEAD_AREA(b) / 8)
@@ -708,6 +714,90 @@ void buf_read_ibuf_merge_pages(
   }
 }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*
+ * read ahead pages used in REDO 2
+ * simulate buf_read_recv_pages()
+ * sync is always false
+ * */
+void
+pm_ppl_buf_read_recv_pages(
+	PMEMobjpool*			pop,
+	PMEM_PAGE_PART_LOG*		ppl,
+	PMEM_RECV_LINE*			recv_line,
+	bool					sync,
+	ulint					space_id,
+	const ulint*			page_nos,
+	ulint					n_stored)
+{
+	ulint			count;
+	dberr_t			err;
+	ulint			i;
+	fil_space_t*	space	= fil_space_get(space_id);
+	
+	int read_ret;
+
+	if (space == NULL) {
+			printf("==== > recv_line %zu has space_id %zu NULL\n", recv_line->hashed_id, space_id);
+		/* The tablespace is missing: do nothing */
+		return;
+	}
+
+	fil_space_open_if_needed(space);
+
+	const page_size_t	page_size(space->flags);
+
+	for (i = 0; i < n_stored; i++) {
+		buf_pool_t*		buf_pool;
+		const page_id_t	cur_page_id(space_id, page_nos[i]);
+
+		count = 0;
+
+		buf_pool = buf_pool_get(cur_page_id);
+
+		while (buf_pool->n_pend_reads >= recv_n_pool_free_frames / 2) {
+			//tdnguyen test
+			printf("tdnguyen test, Pending reads overload buf_pool->n_pend_reads %zu >= recv_n_pool_free_frames / 2 %zu \n", buf_pool->n_pend_reads, recv_n_pool_free_frames / 2
+					);
+
+			os_aio_simulated_wake_handler_threads();
+			os_thread_sleep(10000);
+
+			count++;
+
+			if (!(count % 1000)) {
+
+				ib::error()
+					<< "Waited for " << count / 100
+					<< " seconds for "
+					<< buf_pool->n_pend_reads
+					<< " pending reads";
+			}
+		}
+		/*read_ret: 1 read req is queued
+		 *			0 page is in buffer pool or in DWB
+		 * */
+		read_ret = buf_read_page_low(
+				&err, false,
+				IORequest::DO_NOT_WAKE,
+				BUF_READ_ANY_PAGE,
+				cur_page_id, page_size, true);
+
+		if (read_ret == 1){
+			recv_line->n_read_reqs++;
+		} else {
+			/*page has already in buffer pool or we should not recover this page*/
+	//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);
+	//		recv_line->n_addrs--;
+	//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+		}
+
+	}
+
+	os_aio_simulated_wake_handler_threads();
+
+}
+#endif //UNIV_PMEMOBJ_PART_PL
 /** Issues read requests for pages which recovery wants to read in.
 @param[in]	sync		true if the caller wants this function to wait
                                 for the highest address page to get read in,

@@ -82,6 +82,14 @@ bool meb_replay_file_ops = true;
 #include "../meb/mutex.h"
 #endif /* !UNIV_HOTBACKUP */
 
+#if defined(UNIV_PMEMOBJ_LOG) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+
+//static bool IS_GLOBAL_HASHTABLE = true;
+static bool IS_GLOBAL_HASHTABLE = false;
+#endif //UNIV_PMEMOBJ_PART_PL and other log-based methods
+
 std::list<space_id_t> recv_encr_ts_list;
 
 /** Log records are stored in the hash table in chunks at most of this size;
@@ -3512,6 +3520,54 @@ static void recv_init_crash_recovery() {
 }
 #endif /* !UNIV_HOTBACKUP */
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/* ==============================================
+ * PL-NVM functions for recovery
+ *===============================================
+ * */
+#endif //UNIV_PMEMOBJ_PART_PL
+
+/*
+ * Alternative for log_sys->lsn
+ * */
+ulint
+pm_ppl_get_max_lsn(
+	PMEMobjpool*		pop,
+	PMEM_PAGE_PART_LOG*	ppl)
+{
+	uint32_t n, k, i, j;
+	uint64_t max_lsn;
+
+	max_lsn = 0;
+
+	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
+	PMEM_PAGE_LOG_HASHED_LINE* pline;
+
+	TOID(PMEM_PAGE_LOG_BLOCK) log_block;
+	PMEM_PAGE_LOG_BLOCK*	plog_block;
+
+	n = ppl->n_buckets;
+	k = ppl->n_blocks_per_bucket;
+
+    //find low_watermark for each line
+	for (i = 0; i < n; i++) {
+		pline = D_RW(D_RW(ppl->buckets)[i]);
+
+        //for each block in the line
+        for (j = 0; j < k; j++){
+            plog_block = D_RW(D_RW(pline->arr)[j]);
+
+            if (!plog_block->is_free){
+				if (max_lsn < plog_block->lastLSN){
+					max_lsn = plog_block->lastLSN;
+				}
+            }
+        } //end for each block in the line
+
+    } //end for each line
+
+	return max_lsn;
+}
 #ifndef UNIV_HOTBACKUP
 /** Start recovering from a redo log checkpoint.
 @see recv_recovery_from_checkpoint_finish

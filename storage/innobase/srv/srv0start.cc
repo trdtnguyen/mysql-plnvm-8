@@ -3460,7 +3460,14 @@ static lsn_t srv_shutdown_log() {
 
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  const lsn_t lsn = pm_ppl_get_max_lsn(gb_pmw->pop, gb_pmw->ppl);
+  log_sys->sn = log_translate_lsn_to_sn(lsn);
+  //update the log_sys->lsn
+
+#else //original
   const lsn_t lsn = log_get_lsn(*log_sys);
+#endif //UNIV_PMEMOBJ_PART_PL
 
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
@@ -3492,6 +3499,12 @@ static lsn_t srv_shutdown_log() {
     auto err = fil_write_flushed_lsn(lsn);
     ut_a(err == DB_SUCCESS);
   }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	//TODO: check whether this fix is need in MySQL 8.0
+	/*Since PPL doesn't call log_checkpoint(), fil_names_clear() has never called. Result is fil_system->named_spaces() is not empty at shutdown. So, we manually empty it here */
+	//pm_ppl_remove_fil_spaces();
+#endif
 
   ibt::close_files();
 

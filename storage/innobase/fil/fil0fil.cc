@@ -7575,6 +7575,31 @@ void fil_aio_wait(ulint segment) {
     return;
   }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  if(file->space->purpose == FIL_TYPE_LOG) {
+	  if (message != NULL) {
+		  //the write log and read log share this source
+		  PMEM_PAGE_LOG_BUF* plogbuf = static_cast<PMEM_PAGE_LOG_BUF*> (message);
+
+		  if (plogbuf != NULL && plogbuf->check == PMEM_AIO_CHECK) {
+			  if (type.is_write()){
+				  pm_handle_finished_log_buf(
+						  gb_pmw->pop,
+						  gb_pmw->ppl,
+						  file,
+						  plogbuf);
+			  }
+			  else{
+				  /*do nothing*/
+			  }
+			  return;
+		  }
+		  //this is the InnoDB's REDO log
+	  }
+  }
+  //follow the original InnoDB logic
+#endif //UNIV_PMEMOBJ_PART_PL
+
   srv_set_io_thread_op_info(segment, "complete io for file");
 
   auto shard = fil_system->shard_by_id(file->space->id);
@@ -10943,4 +10968,36 @@ pm_log_fil_read(
 
 	return err;
 }
+
+//This function may not needed in MySQL 8.0
+//void
+//pm_ppl_remove_fil_spaces()
+//{
+//	uint32_t n = UT_LIST_GET_LEN(fil_system->named_spaces);
+//	uint32_t i;
+//
+//	printf("total spaces %zu \n", UT_LIST_GET_LEN(fil_system->named_spaces));
+//	fil_space_t* space;
+//
+//	space = UT_LIST_GET_FIRST(fil_system->named_spaces);
+//
+//	while (space != NULL){
+//		printf("pm_ppl_remove_fil_spaces() id %zu name %s max_lsn %zu\n", space->id, space->name, space->max_lsn);
+//
+//		fil_space_t* next = UT_LIST_GET_NEXT(named_spaces, space);
+//
+//		if (space->max_lsn != 0) {
+//			space->max_lsn = 0;
+//		}
+//		UT_LIST_REMOVE(fil_system->named_spaces, space);
+//
+//
+//		n--;
+//		if (n == 0){
+//			break;	
+//		}
+//
+//		space = next;
+//	}
+//}
 #endif //UNIV_PMEMOBJ_PART_PL
