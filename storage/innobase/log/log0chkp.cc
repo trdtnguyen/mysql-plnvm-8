@@ -69,6 +69,13 @@ the file COPYING.Google.
 
 #ifndef UNIV_HOTBACKUP
 
+#if defined(UNIV_PMEMOBJ_LOG) || defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+
+#endif /*UNIV_PMEMOBJ_LOG*/
+
 /** Checks if checkpoint should be written. Checks time elapsed since the last
 checkpoint, age of the last checkpoint and if there was any extra request to
 write the checkpoint (e.g. coming from log_make_latest_checkpoint()).
@@ -543,6 +550,55 @@ static void log_checkpoint(log_t &log) {
   DBUG_EXECUTE_IF("crash_after_checkpoint", DBUG_SUICIDE(););
 }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*
+ * Compute the final checkpoint lsn in PPL and flush pages to that lsn
+ * Altenative to log_checkpoint_margin(void)
+ * Called by srv_master_do_active_tasks()
+ * */
+uint64_t
+pm_ppl_checkpoint(
+			PMEMobjpool*				pop,
+			PMEM_PAGE_PART_LOG*			ppl
+			)
+{
+	uint32_t i,  n;
+	bool success;
+	lsn_t		oldest_lsn;
+	lsn_t		new_oldest;
+	lsn_t		min_oldest;
+	lsn_t		max_oldest;
+	PMEM_PAGE_LOG_HASHED_LINE* pline;
+
+	//(1) Compute the real checkpoint lsn
+	n = ppl->n_buckets;
+	min_oldest = ULONG_MAX;
+	max_oldest = 0;
+	
+	new_oldest = ppl->max_oldest_lsn;
+
+	float delta = (ppl->max_oldest_lsn - ppl->ckpt_lsn) * 1.0 / 1000000;
+
+	printf("PMEM_INFO: call pm_ppl_checkpoint new_oldest %zu ppl->ckpt_lsn %zu delta %f seconds \n",
+		   	new_oldest, ppl->ckpt_lsn, delta);
+	//TODO:	
+	/*(2) simulate fil_names_clear()*/
+	//pm_ppl_fil_names_clear(new_oldest);
+
+	/*(3) Write pages in buffer pool upto the ckpt_lsn*/
+	/*simulate buf_flush_request_force() without call buf_flush_wait_flushed() as in log_preflush_pool_modified_pages() */
+	pm_ppl_buf_flush_request_force(new_oldest);
+
+	//TODO: no wait in MySQL 8.0
+	//buf_flush_wait_flushed(new_oldest);
+
+	/* (5) update the global ckpt_lsn*/
+	pmemobj_rwlock_wrlock(pop, &ppl->ckpt_lock);
+	ppl->ckpt_lsn = new_oldest;
+	pmemobj_rwlock_unlock(pop, &ppl->ckpt_lock);
+}
+#endif //UNIV_PMEMOBJ_PART_PL
+
 void log_create_first_checkpoint(log_t &log, lsn_t lsn) {
   byte block[OS_FILE_LOG_BLOCK_SIZE];
   lsn_t block_lsn;
@@ -891,7 +947,11 @@ void log_checkpointer(log_t *log_ptr) {
 
   while (true) {
     auto do_some_work = [&log] {
-
+#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIP_LOG)
+		/*PL-NVM uses its own checkpoint mechanism. 
+		 * Thus this lambda function always returns false*/
+		return false; //do nothing
+#else //original
       ut_ad(log_checkpointer_mutex_own(log));
 
       /* We will base our next decisions on maximum lsn
@@ -914,11 +974,23 @@ void log_checkpointer(log_t *log_ptr) {
       }
 
       return (false);
+#endif //UNIV_PMEMOBJ_PART_PL
     };
 
     const auto sig_count = os_event_reset(log.checkpointer_event);
 
     if (!do_some_work()) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  if (gb_pmw->ppl->max_oldest_lsn > gb_pmw->ppl->ckpt_lsn) {
+		  /*In MySQL 8.0, we call checkpoint in log_checkpointer
+		   * thread instead of master thread as in MySQL 5.7*/
+		  pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);
+	  }
+#endif //UNIV_PMEMOBJ_PART_PL
+
+#if defined (UNIV_SKIP_LOG)
+	  /*simply do nothing here, i.e., wait for 10ms then check again*/
+#endif
       log_checkpointer_mutex_exit(log);
 
       os_event_wait_time_low(log.checkpointer_event, 10 * 1000, sig_count);

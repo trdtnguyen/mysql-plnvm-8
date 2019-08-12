@@ -70,6 +70,12 @@ log_checksum_func_t log_checksum_algorithm_ptr;
 #include "os0thread-create.h"
 #include "trx0sys.h"
 
+#if defined(UNIV_PMEMOBJ_LOG) || defined(UNIV_PMEMOBJ_BUF) || defined (UNIV_PMEMOBJ_WAL) || defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmemobj.h"
+
+extern PMEM_WRAPPER* gb_pmw;
+#endif /*UNIV_PMEMOBJ_PART_PL and others*/
+
 /**
 @page PAGE_INNODB_REDO_LOG Innodb redo log
 
