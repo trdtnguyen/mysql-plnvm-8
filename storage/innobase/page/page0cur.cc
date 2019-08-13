@@ -51,6 +51,11 @@ this program; if not, write to the Free Software Foundation, Inc.,
 static ulint page_cur_short_succ = 0;
 #endif /* UNIV_SEARCH_PERF_STAT */
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+#endif //UNIV_PMEMOBJ_PART_PL
+
 #ifndef UNIV_HOTBACKUP
 /** This is a linear congruential generator PRNG. Returns a pseudo random
  number between 0 and 2^64-1 inclusive. The formula and the constants
@@ -1023,9 +1028,22 @@ static void page_cur_insert_rec_write_log(
     memcpy(log_ptr, ins_ptr, rec_size);
     mlog_close(mtr, log_ptr + rec_size);
   } else {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+		/*In PPL, we implemnt our own dyn_buf in mtr.
+		 * We don't rely on the log_end here*/
+		mlog_close(mtr, log_ptr);
+		ut_a(rec_size < UNIV_PAGE_SIZE);
+		log_ptr = mlog_open(mtr, rec_size);
+		memcpy(log_ptr, ins_ptr, rec_size);
+		mlog_close(mtr, log_ptr + rec_size);
+		//this case may cause bug, check	
+		//printf("~~~ WARN: check line 1145 page0cur.cc\n");
+		//assert(0);//debug
+#else //original
     mlog_close(mtr, log_ptr);
     ut_a(rec_size < UNIV_PAGE_SIZE);
     mlog_catenate_string(mtr, ins_ptr, rec_size);
+#endif //UNIV_PMEMOBJ_PART_PL
   }
 }
 #else /* !UNIV_HOTBACKUP */
@@ -1289,6 +1307,11 @@ rec_t *page_cur_insert_rec_low(
     insert_buf = page_mem_alloc_heap(page, NULL, rec_size, &heap_no);
 
     if (UNIV_UNLIKELY(insert_buf == NULL)) {
+#if defined(UNIV_PMEMOBJ_PART_PL)
+			if (!gb_pmw->ppl->is_new){
+				printf("~==~~ WARN WARN: insert_buf is NULL from page_mem_alloc_heap()\n");
+			}
+#endif
       return (NULL);
     }
   }
@@ -2014,7 +2037,10 @@ byte *page_parse_copy_rec_list_to_created_page(
   page_zip_des_t *page_zip;
 
   if (ptr + 4 > end_ptr) {
-    return (NULL);
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  assert(0);
+#endif
+	  return (NULL);
   }
 
   log_data_len = mach_read_from_4(ptr);
@@ -2023,6 +2049,9 @@ byte *page_parse_copy_rec_list_to_created_page(
   rec_end = ptr + log_data_len;
 
   if (rec_end > end_ptr) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	  assert(0);
+#endif
     return (NULL);
   }
 
@@ -2100,7 +2129,14 @@ void page_copy_rec_list_end_to_created_page(
 
   log_ptr = page_copy_rec_list_to_created_page_write_log(new_page, index, mtr);
 
+#if defined(UNIV_PMEMOBJ_PART_PL)
+//handle bug due to reallocate, we save the offset instead of the pointer
+	ulint log_data_len_off = log_ptr - mtr->get_buf();
+
+	log_data_len = mtr->get_cur_off();
+#else //original
   log_data_len = mtr->get_log()->size();
+#endif
 
   /* Individual inserts are logged in a shorter form */
 
@@ -2185,6 +2221,21 @@ void page_copy_rec_list_end_to_created_page(
     mem_heap_free(heap);
   }
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	log_data_len = mtr->get_cur_off() - log_data_len;
+
+	ut_a(log_data_len < 100 * UNIV_PAGE_SIZE);
+	//update log_ptr, it may change if the mtr->buf is reallocate
+	if (log_ptr != (mtr->get_buf() + log_data_len_off)){ 
+		//printf("===> PMEM_NOTICE: previous log_ptr %zu diffs from current %zu, mtr.logbuf may reallocated\n",
+		//		log_ptr, (mtr->get_buf() + log_data_len_off));
+		log_ptr = mtr->get_buf() + log_data_len_off;
+	}
+
+	if (log_ptr != NULL) {
+		mach_write_to_4(log_ptr, log_data_len);
+	}
+#else //original
   log_data_len = mtr->get_log()->size() - log_data_len;
 
   ut_a(log_data_len < 100 * UNIV_PAGE_SIZE);
@@ -2192,6 +2243,7 @@ void page_copy_rec_list_end_to_created_page(
   if (log_ptr != NULL) {
     mach_write_to_4(log_ptr, log_data_len);
   }
+#endif // UNIV_PMEMOBJ_PART_PL
 
   if (page_is_comp(new_page)) {
     rec_set_next_offs_new(insert_rec, PAGE_NEW_SUPREMUM);

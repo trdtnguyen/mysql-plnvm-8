@@ -273,9 +273,13 @@ btr_latch_leaves_t btr_cur_latch_leaves(buf_block_t *block,
                                   page_size, RW_X_LATCH, cursor->index, mtr);
         latch_leaves.blocks[2] = get_block;
 #ifdef UNIV_BTR_DEBUG
+#if defined(UNIV_PMEMOBJ_PART_PL)
+			//PM_PPL skip those ut_a() calls
+#else //original
         ut_a(page_is_comp(get_block->frame) == page_is_comp(page));
         ut_a(btr_page_get_prev(get_block->frame, mtr) ==
              page_get_page_no(page));
+#endif // UNIV_PMEMOBJ_PART_PL
 #endif /* UNIV_BTR_DEBUG */
         if (spatial) {
           cursor->rtr_info->tree_blocks[RTR_MAX_LEVELS + 2] = get_block;

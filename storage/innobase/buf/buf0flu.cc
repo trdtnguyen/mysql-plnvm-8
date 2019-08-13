@@ -3415,8 +3415,11 @@ pm_ppl_buf_flush_recv_note_modification(
 
 	buf_page_mutex_exit(block);
 }
+
 /*
  *Called by pm_ppl_checkpoint()
+ Update buf_flush_sync_lsn then trigger the cleaner coordinate thread
+ that flush dirty page up to buf_flush_sync_lsn
  * */
 void
 pm_ppl_buf_flush_request_force(
@@ -3762,6 +3765,10 @@ pm_log_flusher_close(
 	}
 	//printf("free flusher ok\n");
 }
+/*
+ * Note: In MySQL 8.0 we don't use pm_ppl_flusher_coordinate()
+ * Worker thread of log flusher, flus REDO logs from partition log buffer to partition WAL files 
+ * */
 void pm_log_flusher_worker() {
 
 	ulint i;
@@ -3823,7 +3830,231 @@ void pm_log_flusher_worker() {
 
 	my_thread_end();
 }
+/////////// END FLUSHER /////////////////////
 
+/////////// REDOER /////////////////////
+
+/*
+ * Init the REDOER
+ * @param[in] size: The number of items in the array,
+ * should equal to the number of hashed line
+ * */
+PMEM_LOG_REDOER*
+pm_log_redoer_init(
+				const size_t	size) {
+	PMEM_LOG_REDOER* redoer;
+	ulint i;
+
+	redoer = static_cast <PMEM_LOG_REDOER*> (
+			ut_zalloc_nokey(sizeof(PMEM_LOG_REDOER)));
+
+	mutex_create(LATCH_ID_PM_LOG_REDOER, &redoer->mutex);
+
+	redoer->is_log_req_not_empty = os_event_create("redoer_is_log_req_not_empty");
+	redoer->is_log_req_full = os_event_create("redoer_is_log_req_full");
+	redoer->is_log_all_finished = os_event_create("redoer_is_log_all_finished");
+	redoer->is_log_all_closed = os_event_create("redoer_is_log_all_closed");
+	redoer->size = size;
+	redoer->tail = 0;
+	redoer->n_requested = 0;
+	redoer->is_running = false;
+
+	redoer->hashed_line_arr = static_cast <PMEM_PAGE_LOG_HASHED_LINE**> (	calloc(size, sizeof(PMEM_PAGE_LOG_HASHED_LINE*)));
+	for (i = 0; i < size; i++) {
+		redoer->hashed_line_arr[i] = NULL;
+	}	
+
+	return redoer;
+}
+
+void
+pm_log_redoer_close(
+		PMEM_LOG_REDOER*	redoer) {
+	ulint i;
+	
+	//wait for all workers finish their work
+	while (redoer->n_workers > 0) {
+		os_thread_sleep(10000);
+	}
+
+	for (i = 0; i < redoer->size; i++) {
+		if (redoer->hashed_line_arr[i]){
+			//free(buf->flusher->flush_list_arr[i]);
+			redoer->hashed_line_arr[i] = NULL;
+		}
+			
+	}	
+
+	if (redoer->hashed_line_arr){
+		free(redoer->hashed_line_arr);
+		redoer->hashed_line_arr = NULL;
+	}	
+
+	mutex_destroy(&redoer->mutex);
+
+	os_event_destroy(redoer->is_log_req_not_empty);
+	os_event_destroy(redoer->is_log_req_full);
+
+	os_event_destroy(redoer->is_log_all_finished);
+	os_event_destroy(redoer->is_log_all_closed);
+
+	if(redoer){
+		redoer = NULL;
+		free(redoer);
+	}
+	//printf("free flusher ok\n");
+}
+
+/*
+ * In MySQL 8.0, we don't use redoer coordinator anymore
+ * Worker thread of log redoer.
+ * The recovery thread is responsed for create those threads at recovery time
+ * Do REDO in parallism
+ * */
+void pm_log_redoer_worker() {
+
+	ulint i;
+	pid_t thread_id;
+	ulint idx;
+	ulint lines_per_thread;
+	//int dist_mode = 2;
+	int dist_mode = 1;
+
+	ulint start_time, end_time, e_time;
+
+	PMEM_LOG_REDOER* redoer = gb_pmw->ppl->redoer;
+
+	PMEM_PAGE_LOG_HASHED_LINE* pline = NULL;
+	PMEM_RECV_LINE* recv_line = NULL;
+
+	my_thread_init();
+
+	mutex_enter(&redoer->mutex);
+	idx = redoer->n_workers;
+	redoer->n_workers++;
+	os_event_reset(redoer->is_log_all_closed);
+	mutex_exit(&redoer->mutex);
+	
+	//thread_id = os_thread_pf(os_thread_get_curr_id());
+	//lines_per_thread = redoer->size / (srv_ppl_n_redoer_threads - 1);
+	lines_per_thread = (redoer->size - 1) / srv_ppl_n_redoer_threads + 1;
+
+	//thread_id = syscall(SYS_gettid);
+	//idx = thread_id % srv_ppl_n_redoer_threads;
+
+	printf("Redoers thread %zu lines_per_thread %zu created \n",idx, lines_per_thread);
+
+	while (true) {
+		//worker thread wait until there is is_requested signal 
+retry:
+		os_event_wait(redoer->is_log_req_not_empty);
+
+		//waked up, looking for a hashed line and REDO it
+
+		if(redoer->n_remains == 0){
+			//do nothing
+			break;
+		}
+		/*Method 1: sequential distribute*/
+		//for (i = 0; i < redoer->size; i++) 
+		/*Method 2: segment distribute*/
+		for (i = idx * lines_per_thread;
+			   	i < (idx + 1) * lines_per_thread &&
+			   	i < redoer->size
+				; i++) 
+		/*Method 3: evently distribute*/
+		//for (i = idx ;
+		//	   	i < redoer->size
+		//		; i+= srv_ppl_n_redoer_threads) 
+		{
+			if (dist_mode ==1)
+				mutex_enter(&redoer->mutex);
+
+			pline = redoer->hashed_line_arr[i];
+
+			if (pline != NULL && !pline->is_redoing)
+			{
+				pline->is_redoing = true;
+				recv_line = pline->recv_line;
+				//do not hold the mutex during REDOing
+				if (dist_mode ==1)
+					mutex_exit(&redoer->mutex);
+
+				/***this call REDOing for a line ***/
+				if (redoer->phase == PMEM_REDO_PHASE1){
+					//printf("PMEM_REDO: start REDO_PHASE1 (scan and parse) line %zu ...\n", pline->hashed_id);
+
+
+					//start_time = ut_time_us(NULL);
+					bool is_err = pm_ppl_redo_line(gb_pmw->pop, gb_pmw->ppl, pline);
+					//end_time = ut_time_us(NULL);
+
+					//recv_line->redo1_thread_id = idx; 	
+					//recv_line->redo1_start_time = start_time;
+					//recv_line->redo1_end_time = end_time;
+					//recv_line->redo1_elapse_time = (end_time - start_time);
+
+					if (is_err){
+						printf("PMEM_REDO: error redoing line %zu \n", pline->hashed_id);
+						assert(0);
+					}
+					//printf("PMEM_REDO: end REDO_PHASE1 (scan and parse) line %zu\n", pline->hashed_id);
+				}
+				else {
+#if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
+					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu ...\n", pline->hashed_id);
+#endif
+					//start_time = ut_time_us(NULL);
+					pm_ppl_recv_apply_hashed_line(
+							gb_pmw->pop, gb_pmw->ppl,
+							pline, pline->recv_line->is_ibuf_avail);
+					//end_time = ut_time_us(NULL);
+
+					//recv_line->redo2_thread_id = idx; 	
+					//recv_line->redo2_start_time = start_time;
+					//recv_line->redo2_end_time = end_time;
+					//recv_line->redo2_elapse_time = (end_time - start_time);
+#if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
+					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu\n", pline->hashed_id);
+#endif
+				}
+
+				if (dist_mode ==1)
+					mutex_enter(&redoer->mutex);
+
+				redoer->hashed_line_arr[i] = NULL;
+				//redoer->n_requested--;
+				redoer->n_remains--;
+
+				if (redoer->n_remains == 0){
+					//this is the last REDO
+					if (dist_mode ==1)
+						mutex_exit(&redoer->mutex);
+					break;
+				}
+			}
+			if (dist_mode ==1)
+				mutex_exit(&redoer->mutex);
+		} //end for
+
+		// after this for loop, all lines are either done REDO or REDOing by other threads, this thread has nothing to do
+		break;
+	} //end while thread
+
+	mutex_enter(&redoer->mutex);
+	redoer->n_workers--;
+	if (redoer->n_workers == 0) {
+		printf("The last log redoer is closing. Redo phase %zu redoer->n_remains %zu ppl->n_redoing_lines %zu\n",
+				redoer->phase, redoer->n_remains, gb_pmw->ppl->n_redoing_lines);
+		//trigger the coordinator (the pm_ppl_redo) to wakeup
+		os_event_set(redoer->is_log_all_finished);
+	}
+	mutex_exit(&redoer->mutex);
+
+	my_thread_end();
+}
+
+/////////// END REDOER /////////////////////
 #endif // UNIV_PMEMOBJ_PART_PL
 
 #endif /* UNIV_HOTBACKUP */
