@@ -136,6 +136,10 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
  @name Users writing to log buffer
 
  *******************************************************/
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/*use the global lsn for convenient map from MySQL 8.0*/
+	lsn_t lsn;
+#endif
 
 /** @{ */
 
