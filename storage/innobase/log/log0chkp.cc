@@ -950,6 +950,8 @@ void log_checkpointer(log_t *log_ptr) {
 #if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIP_LOG)
 		/*PL-NVM uses its own checkpoint mechanism. 
 		 * Thus this lambda function always returns false*/
+
+		//TODO: we may update some lsns for the checkpoint work, will find out when debugging
 		return false; //do nothing
 #else //original
       ut_ad(log_checkpointer_mutex_own(log));

@@ -2510,8 +2510,7 @@ files_checked:
 		err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
 	}			
 	else {
-		//TODO:
-		//err = pm_ppl_recovery(gb_pmw->pop, gb_pmw->ppl, flushed_lsn);
+		err = pm_ppl_recovery(gb_pmw->pop, gb_pmw->ppl, flushed_lsn);
 	}
 #else
     err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
@@ -2625,8 +2624,7 @@ files_checked:
     srv_dict_metadata = recv_recovery_from_checkpoint_finish(*log_sys, false);
 #if defined (UNIV_PMEMOBJ_PART_PL)
 		if (!gb_pmw->ppl->is_new){
-			//TODO:
-			//pm_ppl_recv_end(gb_pmw->pop, gb_pmw->ppl);
+			pm_ppl_recv_end(gb_pmw->pop, gb_pmw->ppl);
 		}
 #endif
 

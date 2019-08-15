@@ -893,6 +893,11 @@ Wait_stats log_write_up_to(log_t &log, lsn_t end_lsn, bool flush_to_disk) {
     return (Wait_stats{0});
   }
 
+#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIPLOG)
+  /*PL-NVM does nothing in this function*/
+  return (Wait_stats{0});
+#endif // UNIV_PMEMOBJ_PART_PL
+
   /* We do not need to have exact numbers and we do not care if we
   lost some increments for heavy workload. The value only has usage
   when it is low workload and we need to discover that we request

@@ -556,6 +556,12 @@ static bool recv_report_corrupt_log(const byte *ptr, int type, space_id_t space,
 
   ut_ad(ptr <= recv_sys->buf + recv_sys->len);
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  /*we strictly assert any log error in PL-NVM for debugging*/
+  assert(0);
+  return false;
+#endif
+
   const ulint limit = 100;
   const ulint before = std::min(recv_previous_parsed_rec_offset, limit);
   const ulint after = std::min(recv_sys->len - (ptr - recv_sys->buf), limit);
@@ -1227,6 +1233,12 @@ pages.
                                 the application; the caller must in this case
                                 own the log mutex */
 void recv_apply_hashed_log_recs(log_t &log, bool allow_ibuf) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/*redirect to our function*/
+	if (!gb_pmw->ppl->is_new){
+		return (pm_ppl_recv_apply_hashed_log_recs(gb_pmw->pop, gb_pmw->ppl, allow_ibuf) );
+	}
+#endif
   for (;;) {
     mutex_enter(&recv_sys->mutex);
 
@@ -2407,6 +2419,28 @@ void recv_recover_page_func(
     bool just_read_in,
 #endif /* !UNIV_HOTBACKUP */
     buf_block_t *block) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/*redirect the begin of this function to use our funcitons*/
+	if (!gb_pmw->ppl->is_new){
+		buf_page_t* bpage = (buf_page_t*) block;
+
+		PMEM_PAGE_LOG_HASHED_LINE* pline;
+
+		pline = pm_ppl_get_line_from_key(
+				gb_pmw->pop, gb_pmw->ppl,
+				bpage->id.fold());
+
+		assert(pline != NULL);
+		
+		if (IS_GLOBAL_HASHTABLE){
+			/*the global hashtable approach*/
+			return pm_ppl_recv_recover_page_func(gb_pmw->pop, gb_pmw->ppl, NULL, just_read_in, block);
+		} else {
+			return pm_ppl_recv_recover_page_func(gb_pmw->pop, gb_pmw->ppl, pline, just_read_in, block);
+		}
+	}
+#endif //UNIV_PMEMOBJ_PART_PL
+
   mutex_enter(&recv_sys->mutex);
 
   if (recv_sys->apply_log_recs == false) {
@@ -4142,6 +4176,7 @@ const char *get_mlog_string(mlog_id_t type) {
 #endif /* UNIV_DEBUG || UNIV_HOTBACKUP */
 
 #if defined (UNIV_PMEMOBJ_PART_PL)
+/* Functions from PL-NVM for recovery*/
 //////////////////////////////////////////////////////
 /*
  * Alternative to recv_sys_init
