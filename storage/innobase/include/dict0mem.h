@@ -2334,7 +2334,11 @@ class CorruptedIndexPersister : public Persister {
 
  private:
   /** The length of index_id_t we will write */
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  static const size_t INDEX_ID_LENGTH = MLOG_HEADER_SIZE + 1;
+#else
   static const size_t INDEX_ID_LENGTH = 12;
+#endif // UNIV_PMEMOBJ_PART_PL
 };
 
 /** Persister used for autoinc counters */
@@ -2358,7 +2362,11 @@ class AutoIncPersister : public Persister {
     if the counter exists, so we don't calculate every time.
     Here we need 1 byte for dynamic metadata type and 11 bytes
     for the max possible size of counter. */
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	return (MLOG_HEADER_SIZE + 1);
+#else
     return (12);
+#endif //UNIV_PMEMOBJ_PART_PL
   }
 
   /** Read the autoinc counter from buffer, and store them to

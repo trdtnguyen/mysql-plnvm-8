@@ -6708,7 +6708,11 @@ void Persister::write_log(table_id_t id,
   /* We will write the id in a much compressed format, which costs
   1..11 bytes, and the MLOG_TABLE_DYNAMIC_META costs 1 byte,
   refer to mlog_write_initial_dict_log_record() as well */
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  log_ptr = mlog_open_metadata(mtr, MLOG_HEADER_SIZE + 1 + size);
+#else
   log_ptr = mlog_open_metadata(mtr, 12 + size);
+#endif // UNIV_PMEMOBJ_PART_PL
   ut_ad(log_ptr != NULL);
 
   log_ptr = mlog_write_initial_dict_log_record(

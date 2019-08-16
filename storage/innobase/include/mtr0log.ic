@@ -175,9 +175,6 @@ mlog_write_initial_log_record_low(
 	log_ptr += 2;
 	
 	/*reserve 8-byte for LSN, we write it later when log recs are written to PPL partition log buffer */
-	//lsn = ut_time_us(NULL);
-	//mtr->add_LSN(lsn);
-	//mach_write_to_8(log_ptr, lsn);
 	log_ptr += 8;
 
 	//We compute the key as InnoDB 
@@ -198,6 +195,32 @@ mlog_write_initial_log_record_low(
 
 	mtr->added_rec();
 	return(log_ptr);
+}
+
+/*New in MySQL 8.0
+  The original implement of this function is similar to mlog_write_initial_log_record_low() except:
+1) Type: uint64_t  v.s. uint32_t 
+2) mach_u64_write_much_compressed() v.s. mach_write_compressed()
+*/
+
+UNIV_INLINE
+byte *mlog_write_initial_dict_log_record(
+	mlog_id_t type,
+	table_id_t id,
+    uint64_t version,
+	byte *log_ptr,
+    mtr_t *mtr) {
+
+  ut_ad(type == MLOG_TABLE_DYNAMIC_META);
+  /*
+	TODO: check whether type convert (uint64_t -> uint32_t) here causes problem or not
+	*/
+  return (mlog_write_initial_log_record_low(
+				 type,
+				 (space_id_t) id,
+				 (page_no_t) version,
+				 log_ptr,
+				 mtr));
 }
 
 /*Catenates 1 - 4 bytes to the mtr log. The value is not compressed. */
@@ -367,6 +390,30 @@ void mlog_catenate_ulint(
 
   mlog_catenate_ulint(mtr->get_log(), val, type);
 }
+
+/** Writes a log record about a dictionary operation.
+@param[in]	type		redo log record type
+@param[in]	id		table id
+@param[in]	version		table dynamic metadata version
+@param[in,out]	log_ptr		current end of mini-transaction log
+@param[in,out]	mtr		mini-transaction
+@return end of mini-transaction log */
+UNIV_INLINE
+byte *mlog_write_initial_dict_log_record(mlog_id_t type, table_id_t id,
+                                         uint64_t version, byte *log_ptr,
+                                         mtr_t *mtr) {
+  ut_ad(type <= MLOG_BIGGEST_TYPE);
+  ut_ad(type == MLOG_TABLE_DYNAMIC_META);
+
+  mach_write_to_1(log_ptr, type);
+  log_ptr++;
+
+  log_ptr += mach_u64_write_much_compressed(log_ptr, id);
+  log_ptr += mach_u64_write_much_compressed(log_ptr, version);
+
+  mtr->added_rec();
+  return (log_ptr);
+}
 #endif // UNIV_PMEMOBJ_PART_PL
 /////////////////////////////////////////////////////////////
 ////////////////////////////// We reused below functions /////////////////
@@ -411,29 +458,6 @@ void mlog_catenate_ull_compressed(mtr_t *mtr,      /*!< in: mtr */
   mlog_close(mtr, log_ptr);
 }
 
-/** Writes a log record about a dictionary operation.
-@param[in]	type		redo log record type
-@param[in]	id		table id
-@param[in]	version		table dynamic metadata version
-@param[in,out]	log_ptr		current end of mini-transaction log
-@param[in,out]	mtr		mini-transaction
-@return end of mini-transaction log */
-UNIV_INLINE
-byte *mlog_write_initial_dict_log_record(mlog_id_t type, table_id_t id,
-                                         uint64_t version, byte *log_ptr,
-                                         mtr_t *mtr) {
-  ut_ad(type <= MLOG_BIGGEST_TYPE);
-  ut_ad(type == MLOG_TABLE_DYNAMIC_META);
-
-  mach_write_to_1(log_ptr, type);
-  log_ptr++;
-
-  log_ptr += mach_u64_write_much_compressed(log_ptr, id);
-  log_ptr += mach_u64_write_much_compressed(log_ptr, version);
-
-  mtr->added_rec();
-  return (log_ptr);
-}
 
 
 #ifndef UNIV_HOTBACKUP
