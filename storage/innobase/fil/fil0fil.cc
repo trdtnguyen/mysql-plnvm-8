@@ -2179,10 +2179,16 @@ fil_node_t *Fil_shard::create_node(const char *name, page_no_t size,
   space->files.push_back(file);
 
   mutex_release();
-
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  ut_a(space->id == TRX_SYS_SPACE ||
+       space->id == dict_sys_t::s_log_space_first_id ||
+       space->id == PMEM_LOG_SPACE_FIRST_ID ||
+       space->purpose == FIL_TYPE_TEMPORARY || space->files.size() == 1);
+#else // original
   ut_a(space->id == TRX_SYS_SPACE ||
        space->id == dict_sys_t::s_log_space_first_id ||
        space->purpose == FIL_TYPE_TEMPORARY || space->files.size() == 1);
+#endif // UNIV_PMEMBOJ_PART_PL
 
   return (&space->files.front());
 }

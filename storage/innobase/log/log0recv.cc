@@ -4438,8 +4438,9 @@ pm_ppl_recovery(
 	/* Synchronize the uncorrupted log groups to the most up-to-date log
 	group; we also copy checkpoint info to groups */
 	
-	/*simulate fil_names_clear(log_sys->last_checkpoint_lsn, true)*/
-	pm_ppl_fil_names_clear(max_recovered_lsn);
+	/*MySQL 8.0 removes this function
+	 * simulate fil_names_clear(log_sys->last_checkpoint_lsn, true)*/
+	//pm_ppl_fil_names_clear(max_recovered_lsn);
 
 	/*IMPORTANT 
 	 * Set apply_log_recs for each recv_line to TRUE, so that UNDO pages and other data pages can be applied (actual REDOing) when read on.
@@ -5570,7 +5571,14 @@ pm_ppl_recv_get_max_recovered_lsn(
 	return max_lsn;
 }
 
-/*Simulate recv_get_rec*/
+/*Simulate recv_get_rec
+ * Search the object from the partition hashtable given the space_id and page_no
+ *
+ *@param[in] recv_line: The partition recv line
+ @param[in] space_id: space id
+ @param[in] page_no: page no
+ @return the matched recv_addr_t struct in the hashtable if the object found. Otherwise return NULL
+ * */
 recv_addr_t*
 pm_ppl_recv_get_rec(
 	PMEM_RECV_LINE* recv_line,
@@ -5740,8 +5748,6 @@ pm_ppl_recv_recover_page_func(
 			recv = UT_LIST_GET_NEXT(rec_list, recv)) {
 #ifndef UNIV_HOTBACKUP
 		end_lsn = recv->end_lsn;
-
-		ut_ad(end_lsn <= max_lsn);
 #endif /* !UNIV_HOTBACKUP */
 
 		byte *buf;
@@ -5974,6 +5980,86 @@ pm_ppl_recv_apply_single_page(
 
 		assert(read_ok);
 	}
+}
+/*
+ *Apply important pages prior to apply other 
+ For system tablespace
+ 1) page 0
+ 2) trx_sys page (page 5)
+ For each dirty space we apply
+ 1) page 0
+ 2) INODE (page 2)
+ 3) root clustered index page
+ 4) root non-clustered index page
+ * */
+
+void
+pm_ppl_recv_apply_prior_pages(
+	PMEMobjpool*		pop,
+	PMEM_PAGE_PART_LOG*	ppl,
+	PMEM_PAGE_LOG_HASHED_LINE* pline,
+	ibool	allow_ibuf)
+{
+	fil_space_t* space;
+	space_id_t space_id;
+
+	recv_addr_t* recv_addr;
+	uint32_t j;
+	
+	PMEM_RECV_LINE* recv_line;
+
+	uint32_t page_no_arr[] = {0, 2, 3, 4};
+	uint32_t page_no_arr_len = 4;
+
+	if (pline != NULL){ 
+		recv_line	= pline->recv_line;
+	} else {
+		recv_line = ppl->recv_line;
+	}
+
+	recv_line->apply_log_recs = TRUE;
+	recv_line->apply_batch_on = TRUE;
+
+	//Apply first page System tablespace
+	recv_addr = pm_ppl_recv_get_rec(recv_line, 0, 0);
+	if (recv_addr != NULL){
+		printf("Apply space 0 page 0\n");
+		pm_ppl_recv_apply_single_page(pop, ppl, pline, recv_addr->space, recv_addr->page_no);
+	}
+
+	recv_addr = pm_ppl_recv_get_rec(recv_line, 0, 2);
+	if (recv_addr != NULL){
+		printf("Apply space 0 page 2 (INODE)\n");
+		pm_ppl_recv_apply_single_page(pop, ppl, pline, recv_addr->space, recv_addr->page_no);
+	}
+
+	recv_addr = pm_ppl_recv_get_rec(recv_line, 0, 5);
+	if (recv_addr != NULL){
+		printf("Apply space 0 page 5 (SYS_TRX)\n");
+		pm_ppl_recv_apply_single_page(pop, ppl, pline, recv_addr->space, recv_addr->page_no);
+	}
+	
+	//Apply first page for remain spaces
+
+	for (auto &it : *recv_sys->spaces) {
+		space_id = it.first;	
+
+		for (j = 0; j < page_no_arr_len; j++)
+		{
+			uint32_t page_no = page_no_arr[j];
+
+			recv_addr = pm_ppl_recv_get_rec(recv_line, space_id, page_no);
+
+			if (recv_addr != NULL){
+				//printf("Apply page %u for space %zu name %s\n", page_no, space->id, space->name);
+				pm_ppl_recv_apply_single_page(pop, ppl, pline, recv_addr->space, recv_addr->page_no);
+			} else {
+				//printf("Page %u of space %zu name %s is NOT in hashtable\n",page_no, space->id, space->name);
+			}
+		}
+	} //end outer for
+
+	printf("PMEM_INFO: END apply prior pages\n");
 }
 /*
  * REDO2 (APPLY PHASE) 

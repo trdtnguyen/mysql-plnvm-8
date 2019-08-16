@@ -59,6 +59,14 @@ mlog_open(
 	return (mtr->open_buf(size));
 }
 
+UNIV_INLINE
+byte *mlog_open_metadata(mtr_t *mtr, ulint size) {
+
+	/*similar to mlog_open() but doesn't call set_modified()*/
+
+	return (mtr->open_buf(size));
+}
+
 /*Closes a buffer
 Set the cur_off to the ptr
 The ptr must greater than the cur_off (only move forward)
@@ -273,6 +281,16 @@ byte *mlog_open(mtr_t *mtr, ulint size) {
 
   return (mtr->get_log()->open(size));
 }
+/** Opens a buffer to mlog. It must be closed with mlog_close.
+This is used for writing log for metadata changes
+@param[in,out]	mtr	mtr
+@param[in]	size	buffer size in bytes; MUST be smaller than
+                        DYN_ARRAY_DATA_SIZE!
+@return buffer */
+UNIV_INLINE
+byte *mlog_open_metadata(mtr_t *mtr, ulint size) {
+  return (mtr->get_log()->open(size));
+}
 
 /** Closes a buffer opened to mlog. */
 UNIV_INLINE
@@ -354,16 +372,6 @@ void mlog_catenate_ulint(
 ////////////////////////////// We reused below functions /////////////////
 ////////////////////////////////////////////////////////////////
 
-/** Opens a buffer to mlog. It must be closed with mlog_close.
-This is used for writing log for metadata changes
-@param[in,out]	mtr	mtr
-@param[in]	size	buffer size in bytes; MUST be smaller than
-                        DYN_ARRAY_DATA_SIZE!
-@return buffer */
-UNIV_INLINE
-byte *mlog_open_metadata(mtr_t *mtr, ulint size) {
-  return (mtr->get_log()->open(size));
-}
 
 /** Catenates a compressed ulint to mlog. */
 UNIV_INLINE

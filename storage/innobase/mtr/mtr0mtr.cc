@@ -253,7 +253,11 @@ struct Add_dirty_blocks_to_flush_list {
 
   /** Add the modified page to the buffer flush list. */
   void add_dirty_page_to_flush_list(mtr_memo_slot_t *slot) const {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+    ut_ad(m_end_lsn >= m_start_lsn || (m_end_lsn == 0 && m_start_lsn == 0));
+#else //original
     ut_ad(m_end_lsn > m_start_lsn || (m_end_lsn == 0 && m_start_lsn == 0));
+#endif //UNIV_PMEMOBJ_PART_PL
 
 #ifndef UNIV_HOTBACKUP
     buf_block_t *block;

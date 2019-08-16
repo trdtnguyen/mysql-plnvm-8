@@ -266,10 +266,15 @@ inline lsn_t log_translate_lsn_to_sn(lsn_t lsn) {
 #endif /* !UNIV_HOTBACKUP */
 
 inline bool log_lsn_validate(lsn_t lsn) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/*PL-NVM skip this assert*/
+	return true;
+#else
   const uint32_t offset = lsn % OS_FILE_LOG_BLOCK_SIZE;
 
   return (lsn >= LOG_START_LSN && offset >= LOG_BLOCK_HDR_SIZE &&
           offset < OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE);
+#endif //UNIV_PMEMBOJ_PART_PL
 }
 
 #ifndef UNIV_HOTBACKUP

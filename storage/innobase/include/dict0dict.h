@@ -1180,6 +1180,9 @@ struct dict_sys_t {
 
   /** The first ID of the redo log pseudo-tablespace */
   static constexpr space_id_t s_log_space_first_id = 0xFFFFFFF0UL;
+#if defined (UNIV_PMEMOBJ_PART_PL)
+#define PMEM_LOG_SPACE_FIRST_ID 0xFFFFFFF1UL
+#endif //UNIV_PMEMOBJ_PART_PL
 
   /** Use maximum UINT value to indicate invalid space ID. */
   static constexpr space_id_t s_invalid_space_id = 0xFFFFFFFF;

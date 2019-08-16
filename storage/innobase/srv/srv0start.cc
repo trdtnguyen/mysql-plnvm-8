@@ -3770,7 +3770,7 @@ pm_create_or_open_part_log_files(
 	*/
 	fil_space_t*	log_space = fil_space_create(
 		"pl_redo_log",
-	   	dict_sys_t::s_log_space_first_id,
+	   	PMEM_LOG_SPACE_FIRST_ID,
 		fsp_flags_set_page_size(0, univ_page_size),
 		FIL_TYPE_LOG);
 	//ut_a(fil_validate()); //MySQL 5.7
