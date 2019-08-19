@@ -3423,6 +3423,9 @@ void Fil_shard::close_all_files() {
 
     ut_a(space->id == TRX_SYS_SPACE || space->purpose == FIL_TYPE_TEMPORARY ||
          space->id == dict_sys_t::s_log_space_first_id ||
+#if defined (UNIV_PMEMOBJ_PART_PL)
+         space->id == PMEM_LOG_SPACE_FIRST_ID ||
+#endif //UNIV_PMEMOBJ_PART_PL
          space->files.size() == 1);
 
     if (space->id == dict_sys_t::s_log_space_first_id) {
