@@ -1619,9 +1619,21 @@ pm_ppl_write_rec(
 
 
 	assert(rec_size > 0);
+	if ( (*log_src) == MLOG_TABLE_DYNAMIC_META) {
+		/*New in MySQL 8.0
+		 * The last two param is table_id and version
+		 * */
+		table_id_t table_id;
+		uint64 version; //note that uint64 is long long unsigned int
 
-	temp = mlog_parse_initial_log_record(
-			log_src, log_src + rec_size, &type, &space, &page_no);
+		temp = mlog_parse_initial_dict_log_record(
+				log_src, log_src + rec_size, &type, &table_id, &version);
+		space = (uint32_t) table_id;
+		page_no = (uint32_t) version;
+	} else {
+		temp = mlog_parse_initial_log_record(
+				log_src, log_src + rec_size, &type, &space, &page_no);
+	}
 	check_size = mach_read_from_2(temp);
 
 	assert (check_size == rec_size);

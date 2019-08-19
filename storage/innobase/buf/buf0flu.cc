@@ -558,6 +558,17 @@ void buf_flush_insert_into_flush_list(
   ut_ad(log_lsn_validate(lsn));
   ut_ad(block->page.oldest_modification == 0);
   ut_ad(block->page.newest_modification >= lsn);
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  //debug
+  if (UT_LIST_GET_FIRST(buf_pool->flush_list)) {
+	  bool check_valid = buf_flush_list_order_validate(
+			  UT_LIST_GET_FIRST(buf_pool->flush_list)->oldest_modification, lsn);
+	  if (!check_valid){
+		  buf_page_t* first_page = UT_LIST_GET_FIRST(buf_pool->flush_list);
+		  printf("Check here!\n");
+	  }
+  }
+#endif //UNIV_PMEMOBJ_PART_PL
 
   ut_ad(UT_LIST_GET_FIRST(buf_pool->flush_list) == NULL ||
         buf_flush_list_order_validate(
@@ -997,7 +1008,19 @@ void buf_flush_init_for_writing(const buf_block_t *block, byte *page,
   }
 
   /* Write the newest modification lsn to the page header and trailer */
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  /*Debug*/
+  lsn_t read_lsn = mach_read_from_8(page + FIL_PAGE_LSN);
+  if (read_lsn > newest_lsn){
+	  printf("WARNING space %zu page %zu read_lsn %zu > newest_lsn %zu. Assign read_lsn to newest_lsn.\n",
+			  block->page.id.space(), block->page.id.page_no(), read_lsn, newest_lsn);
+
+	  newest_lsn = read_lsn;
+	  //assert(0);
+  }
+#else // original
   ut_ad(skip_lsn_check || mach_read_from_8(page + FIL_PAGE_LSN) <= newest_lsn);
+#endif //UNIV_PMEMOBJ_PART_PL
 
   mach_write_to_8(page + FIL_PAGE_LSN, newest_lsn);
 

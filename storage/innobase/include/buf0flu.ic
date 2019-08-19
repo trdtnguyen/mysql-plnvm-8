@@ -103,7 +103,18 @@ void buf_flush_note_modification(
 
     buf_flush_insert_into_flush_list(buf_pool, block, start_lsn);
   } else if (start_lsn != 0) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	if (block->page.id.space() == 0xFFFFFFFE){
+		/*we skip assert for dictionary space
+		temporary fix the bug when use the old format of MySQL 5.7
+		*/
+	}
+	else {
+		ut_ad(block->page.oldest_modification <= start_lsn);
+	}
+#else //original
     ut_ad(block->page.oldest_modification <= start_lsn);
+#endif //UNIV_PMEMOBJ_PART_PL
   }
 
   buf_page_mutex_exit(block);

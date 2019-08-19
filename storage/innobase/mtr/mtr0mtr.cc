@@ -456,22 +456,26 @@ void mtr_t::start(bool sync, bool read_only) {
 
   ut_d(m_impl.m_magic_n = MTR_MAGIC_N);
 #if defined (UNIV_PMEMOBJ_PART_PL)
-  m_impl.key_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
-  m_impl.LSN_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
-  m_impl.off_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
-  m_impl.len_off_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
+  /*maximize number of REDO recs a mtr's buffer has */
+  //ulint MAX_RECS = 512; //MySQL 5.7
+  ulint MAX_RECS = 1024; //MySQL 8.0
+
+  m_impl.key_arr = (uint64_t*) calloc(MAX_RECS, sizeof(uint64_t));
+  m_impl.LSN_arr = (uint64_t*) calloc(MAX_RECS, sizeof(uint64_t));
+  m_impl.off_arr = (uint16_t*) calloc(MAX_RECS, sizeof(uint16_t));
+  m_impl.len_off_arr = (uint16_t*) calloc(MAX_RECS, sizeof(uint16_t));
 #if defined (UNIV_PMEMOBJ_VALID_MTR)	
-  m_impl.space_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
-  m_impl.page_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
-  m_impl.size_arr = (uint64_t*) calloc(512, sizeof(uint64_t));
-  m_impl.type_arr = (uint16_t*) calloc(512, sizeof(uint16_t));
+  m_impl.space_arr = (uint64_t*) calloc(MAX_RECS, sizeof(uint64_t));
+  m_impl.page_arr = (uint64_t*) calloc(MAX_RECS, sizeof(uint64_t));
+  m_impl.size_arr = (uint64_t*) calloc(MAX_RECS, sizeof(uint64_t));
+  m_impl.type_arr = (uint16_t*) calloc(MAX_RECS, sizeof(uint16_t));
 #endif //UNIV_PMEMOBJ_VALID_MTR
 
   //ulint max_init_size = 16384;	
   //ulint max_init_size = 8192;	//debug OK
-  //ulint max_init_size = 4096;	
+  ulint max_init_size = 4096;	
   //ulint max_init_size = 1024;	// for Linkbench
-  ulint max_init_size = 512;	// original value
+  //ulint max_init_size = 512;	// original value
 
   m_impl.buf = (byte*) calloc(max_init_size, sizeof(byte));
   m_impl.cur_off = 0;
