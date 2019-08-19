@@ -595,6 +595,7 @@ pm_ppl_checkpoint(
 	/* (5) update the global ckpt_lsn*/
 	pmemobj_rwlock_wrlock(pop, &ppl->ckpt_lock);
 	ppl->ckpt_lsn = new_oldest;
+	//log_sys->last_checkpoint_lsn.store(ppl->ckpt_lsn);
 	pmemobj_rwlock_unlock(pop, &ppl->ckpt_lock);
 }
 #endif //UNIV_PMEMOBJ_PART_PL
@@ -988,17 +989,24 @@ void log_checkpointer(log_t *log_ptr) {
 		   * thread instead of master thread as in MySQL 5.7*/
 		  pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);
 	  }
-#endif //UNIV_PMEMOBJ_PART_PL
+
+      log_checkpointer_mutex_exit(log);
+	  /*checkpoint interval is 1s*/
+      os_event_wait_time_low(log.checkpointer_event, 3000 * 1000, sig_count);
+
+      log_checkpointer_mutex_enter(log);
+#else //original
 
 #if defined (UNIV_SKIP_LOG)
 	  /*simply do nothing here, i.e., wait for 10ms then check again*/
-#endif
+#endif //UNIV_SKIP_LOG
       log_checkpointer_mutex_exit(log);
 
       os_event_wait_time_low(log.checkpointer_event, 10 * 1000, sig_count);
 
       log_checkpointer_mutex_enter(log);
 
+#endif //UNIV_PMEMOBJ_PART_PL
     } else {
       log_checkpointer_mutex_exit(log);
 

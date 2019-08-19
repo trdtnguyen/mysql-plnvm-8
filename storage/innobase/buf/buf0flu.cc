@@ -560,20 +560,22 @@ void buf_flush_insert_into_flush_list(
   ut_ad(block->page.newest_modification >= lsn);
 #if defined (UNIV_PMEMOBJ_PART_PL)
   //debug
+  /*buf_flush_list_order_validate() check againt recent_closed.tail that is
+   * not used in PL-NVM.*/
   if (UT_LIST_GET_FIRST(buf_pool->flush_list)) {
 	  bool check_valid = buf_flush_list_order_validate(
 			  UT_LIST_GET_FIRST(buf_pool->flush_list)->oldest_modification, lsn);
 	  if (!check_valid){
 		  buf_page_t* first_page = UT_LIST_GET_FIRST(buf_pool->flush_list);
-		  printf("Check here!\n");
+		  printf("Error may occur if PL-NVM doesn't skip this check. Check here!\n");
 	  }
   }
-#endif //UNIV_PMEMOBJ_PART_PL
-
+#else //original
   ut_ad(UT_LIST_GET_FIRST(buf_pool->flush_list) == NULL ||
         buf_flush_list_order_validate(
             UT_LIST_GET_FIRST(buf_pool->flush_list)->oldest_modification, lsn));
 
+#endif //UNIV_PMEMOBJ_PART_PL
   block->page.oldest_modification = lsn;
 
   UT_LIST_ADD_FIRST(buf_pool->flush_list, &block->page);

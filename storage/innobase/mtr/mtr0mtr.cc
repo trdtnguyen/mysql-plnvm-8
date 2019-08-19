@@ -473,9 +473,9 @@ void mtr_t::start(bool sync, bool read_only) {
 
   //ulint max_init_size = 16384;	
   //ulint max_init_size = 8192;	//debug OK
-  ulint max_init_size = 4096;	
+  //ulint max_init_size = 4096;	
   //ulint max_init_size = 1024;	// for Linkbench
-  //ulint max_init_size = 512;	// original value
+  ulint max_init_size = 512;	// original value
 
   m_impl.buf = (byte*) calloc(max_init_size, sizeof(byte));
   m_impl.cur_off = 0;

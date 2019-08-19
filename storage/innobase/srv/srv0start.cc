@@ -3461,6 +3461,7 @@ static lsn_t srv_shutdown_log() {
 #if defined (UNIV_PMEMOBJ_PART_PL)
   const lsn_t lsn = pm_ppl_get_max_lsn(gb_pmw->pop, gb_pmw->ppl);
   log_sys->sn = log_translate_lsn_to_sn(lsn);
+  log_sys->last_checkpoint_lsn.store(lsn);
   //update the log_sys->lsn
 
 #else //original
@@ -3484,6 +3485,9 @@ static lsn_t srv_shutdown_log() {
   }
 
   /* Validate lsn and write it down. */
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  /*skip validate lsn in PL-NVM*/
+#else // original
   ut_a(log_lsn_validate(lsn) || srv_force_recovery >= SRV_FORCE_NO_LOG_REDO);
 
   ut_a(lsn == log_sys->last_checkpoint_lsn ||
@@ -3491,6 +3495,7 @@ static lsn_t srv_shutdown_log() {
 
   ut_a(lsn == log_get_lsn(*log_sys));
 
+#endif
   if (!srv_read_only_mode) {
     ut_a(srv_force_recovery < SRV_FORCE_NO_LOG_REDO);
 

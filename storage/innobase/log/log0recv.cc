@@ -3578,8 +3578,6 @@ static void recv_init_crash_recovery() {
  * PL-NVM functions for recovery
  *===============================================
  * */
-#endif //UNIV_PMEMOBJ_PART_PL
-
 /*
  * Alternative for log_sys->lsn
  * */
@@ -3621,6 +3619,8 @@ pm_ppl_get_max_lsn(
 
 	return max_lsn;
 }
+#endif //UNIV_PMEMOBJ_PART_PL
+
 #ifndef UNIV_HOTBACKUP
 /** Start recovering from a redo log checkpoint.
 @see recv_recovery_from_checkpoint_finish
