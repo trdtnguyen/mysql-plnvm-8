@@ -2510,7 +2510,7 @@ files_checked:
 		err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
 	}			
 	else {
-		err = pm_ppl_recovery(gb_pmw->pop, gb_pmw->ppl, flushed_lsn);
+		err = pm_ppl_recovery(gb_pmw->pop, gb_pmw->ppl, *log_sys, flushed_lsn);
 	}
 #else
     err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
@@ -3521,7 +3521,11 @@ static lsn_t srv_shutdown_log() {
   log_background_threads_inactive_validate(*log_sys);
   ut_a(srv_any_background_threads_are_active() == nullptr);
   ut_a(!srv_master_thread_active());
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  // skip assert
+#else //original
   ut_a(lsn == log_get_lsn(*log_sys));
+#endif //UNIV_PMEMOBJ_PART_PL
 
   return (lsn);
 }

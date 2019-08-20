@@ -544,6 +544,11 @@ struct __pmem_page_part_log {
 	uint16_t			n_redoing_lines; /*# lines are redoing*/
 	bool				is_redoing_done; /*true iff n_redoing_lines == 0*/
 	os_event_t redoing_done_event; //event for redoing
+	
+	/*In-mem space array, collected during PARSE phase 
+	 * and need to open by a single thread before APPLY*/
+	using Recv_Space_IDs = std::set<space_id_t>;
+	Recv_Space_IDs recv_space_ids;
 
 	/*DRAM Log File*/	
 	uint64_t			log_file_size;
@@ -1191,6 +1196,12 @@ pm_ppl_hash_get(
 		PMEM_PAGE_LOG_HASHED_LINE* pline,
 		uint64_t			key	);
 
+/*New in MySQL 8.0*/
+void pm_ppl_log_start(
+		log_t &log,
+		lsn_t checkpoint_lsn,
+		lsn_t start_lsn);
+
 /*
  * Add a plogblock's key on the pline hashtable
  * @param[in] pop
@@ -1483,6 +1494,7 @@ dberr_t
 pm_ppl_recovery(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*	ppl,
+		log_t &log,
 		lsn_t flush_lsn);
 
 void 

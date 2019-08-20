@@ -568,7 +568,64 @@ bool log_sys_init(uint32_t n_files, uint64_t file_size, space_id_t space_id) {
 
   return (true);
 }
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*New in MySQL 8.0
+ * Simulate log_start() that :
+ * 1) Init
+ * 2) assigns lsn values to avoid
+ * assertions*/
+void pm_ppl_log_start(
+		log_t &log,
+		lsn_t checkpoint_lsn,
+		lsn_t start_lsn) {
 
+
+	log.write_to_file_requests_total.store(0);
+	log.write_to_file_requests_interval.store(0);
+
+	log.recovered_lsn = start_lsn;
+	log.last_checkpoint_lsn = checkpoint_lsn;
+
+	log_update_limits(log);
+
+	log.sn = log_translate_lsn_to_sn(log.recovered_lsn);
+
+	log.recent_written.add_link(0, start_lsn);
+	log.recent_written.advance_tail();
+	ut_a(log_buffer_ready_for_write_lsn(log) == start_lsn);
+
+	log.recent_closed.add_link(0, start_lsn);
+	log.recent_closed.advance_tail();
+
+	log.write_lsn = start_lsn;
+	log.flushed_to_disk_lsn = start_lsn;
+
+	log_files_update_offsets(log, start_lsn);
+
+	log.write_ahead_end_offset = ut_uint64_align_up(log.current_file_real_offset,
+			srv_log_write_ahead_size);
+
+	lsn_t block_lsn;
+	byte *block;
+
+	block_lsn = ut_uint64_align_down(start_lsn, OS_FILE_LOG_BLOCK_SIZE);
+
+	ut_a(block_lsn % log.buf_size + OS_FILE_LOG_BLOCK_SIZE <= log.buf_size);
+
+	block = static_cast<byte *>(log.buf) + block_lsn % log.buf_size;
+
+	log_block_set_hdr_no(block, log_block_convert_lsn_to_no(block_lsn));
+
+	log_block_set_flush_bit(block, true);
+
+	log_block_set_data_len(block, start_lsn - block_lsn);
+
+	log_block_set_first_rec_group(block, start_lsn % OS_FILE_LOG_BLOCK_SIZE);
+	/* Do not reorder writes above, below this line. For x86 this
+	   protects only from unlikely compile-time reordering. */
+	std::atomic_thread_fence(std::memory_order_release);
+}
+#endif // UNIV_PMEMOBJ_PART_PL
 void log_start(log_t &log, checkpoint_no_t checkpoint_no, lsn_t checkpoint_lsn,
                lsn_t start_lsn) {
   ut_a(log_sys != nullptr);

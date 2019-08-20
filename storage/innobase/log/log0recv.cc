@@ -4199,6 +4199,8 @@ pm_ppl_recv_init(
 
 	n = ppl->n_buckets;
 	
+	new (&ppl->recv_space_ids) PMEM_PAGE_PART_LOG::Recv_Space_IDs();
+	
 	if (IS_GLOBAL_HASHTABLE){
 		//A: allocate global recv_line
 		avail_mem = buf_pool_get_curr_size();
@@ -4304,6 +4306,9 @@ pm_ppl_recv_end(
 	PMEM_RECV_LINE* recv_line;
 
 	n = ppl->n_buckets;
+
+	call_destructor(&ppl->recv_space_ids);
+
 	if (IS_GLOBAL_HASHTABLE) {
 		//A: free global recv_line
 		recv_line = ppl->recv_line;
@@ -4369,6 +4374,7 @@ dberr_t
 pm_ppl_recovery(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*	ppl,
+		log_t &log,
         lsn_t flush_lsn
         ) 
 {
@@ -4380,41 +4386,55 @@ pm_ppl_recovery(
 	dberr_t		err;
     
 	ulint n = ppl->n_buckets;
-	//ulint avail_mem = buf_pool_get_curr_size();
-	//avail_mem = avail_mem / 512 / n;
+
+	/*Init PL-NVM data structures for recovery*/
     pm_ppl_recv_init(pop, ppl);
 
 	/* Initialize red-black tree for fast insertions into the
 	flush_list during recovery process. */
 	buf_flush_init_flush_rbt();
 
+	if (srv_force_recovery >= SRV_FORCE_NO_LOG_REDO) {
+		ib::info(ER_IB_MSG_728);
+
+		/* We leave redo log not started and this is read-only mode. */
+		ut_a(log.sn == 0);
+		ut_a(srv_read_only_mode);
+
+		return (DB_SUCCESS);
+	}
+
 	recv_recovery_on = true;
 	//log_mutex_enter(); //MySQL 8.0 doesn't have this func
     
 	/*Phase 1: Analysis and prepare data structure for recovery
-     *pm_ppl_analysis() replace old codes until the first recv_group_scan_log_recs()
+     *pm_ppl_analysis() replace old codes until recv_recovery_begin()
      * */
     pm_ppl_analysis(pop, ppl, &global_max_lsn);
     printf("\nPMEM_REC: ====    ANALYSIS FINISH ====== \n");
 
-	//end test
-	/*Phase 2: REDO*/
-    //Simulate recv_group_scan_log_recs(), we do in parallelism
+	/*Phase 2: REDO
+    Simulate recv_recovery_begin() that call recv_read_log_seg()
+   	and recv_scan_log_recs() to read and parse REDO logs from 
+	WAL files to recovery's buffer 
+	*/
     pm_ppl_redo(pop, ppl);
 		
 	max_recovered_lsn = pm_ppl_recv_get_max_recovered_lsn(
 		pop, ppl);	
 	
 
-    // all code related with checkpoint is removed because we don't use checkpoint
+    /* all code related with checkpoint is removed because we don't use checkpoint
     
-    //at the end of pm_ppl_redo, recv_sys->recovered_lsn is the last offset of the last line
+    at the end of pm_ppl_redo, recv_sys->recovered_lsn is the last offset of the last line, update the log_sys lsn to avoid runtime error of assertions */
 	
-	//log_sys->lsn = max_recovered_lsn;
-	log_sys->lsn = max_recovered_lsn;
+	log.lsn = max_recovered_lsn;
+	log.sn.store(log_translate_lsn_to_sn(log.lsn));
 
 	recv_needed_recovery = true;
 
+	/*New in MySQL 8.0, Simulate log_start() assigns corresponding lsn values with checkpoint_lsn and recovered_lsn*/
+	pm_ppl_log_start(log, global_max_lsn, max_recovered_lsn);
 
     /*
 	 * In MySQL 5.7: recv_init_crash_recovery_spaces() call buf_dblwr_process() that correct tone page using DWB 
@@ -4424,14 +4444,26 @@ pm_ppl_recovery(
 
 	//err = pm_ppl_recv_init_crash_recovery_spaces(pop, ppl, max_recovered_lsn);
 	buf_dblwr_process();
-	
-   
 
-    if (err != DB_SUCCESS) {
-        //log_mutex_exit(); //not used in MySQL 8.0
-        return(err);
-    }
-    
+    //if (err != DB_SUCCESS) {
+    //    //log_mutex_exit(); //not used in MySQL 8.0
+    //    return(err);
+    //}
+	
+	for (auto space_id : ppl->recv_space_ids){
+		fil_space_t* space_tem = fil_space_get(space_id);
+
+		if (space_tem == nullptr){
+			bool is_open_success = fil_tablespace_open_for_recovery(space_id);
+			printf("===> DEBUG: fil_tablespace_open_for_recovery() space %u return %d\n", space_id, is_open_success);
+
+			if (!is_open_success){
+				ut_ad(!fil_tablespace_lookup_for_recovery(space_id) ||
+						fsp_is_undo_tablespace(space_id));
+			}
+		} else {
+		}
+	}
     //we don't need to rescan because we put log recs in HASH table in the first scan
 
 
@@ -5160,6 +5192,11 @@ loop:
 		default:
 		/*In MySLQ */
 		if (is_need){
+			/*new in MySQL 8.0 insert the space in the global space set*/
+			pmemobj_rwlock_wrlock(pop, &ppl->recv_lock);
+			ppl->recv_space_ids.insert(space);
+			pmemobj_rwlock_unlock(pop, &ppl->recv_lock);
+
 			if (!IS_GLOBAL_HASHTABLE){
 				pm_ppl_recv_add_to_hash_table(
 						pop, ppl, recv_line,
@@ -5434,15 +5471,15 @@ pm_ppl_recv_add_to_hash_table(
 
 	//recv_addr_t*	recv_addr; //MySQL 5.7
 	recv_sys_t::Space *space; //MySQL 8.0
+	/*get the Space map from the hashtable.
+	 * Create the new one if the Space is not existed*/
 	space = pm_ppl_recv_get_page_map(recv_line, space_id, true);
 
 	len = rec_end - body;
 	
-	//(1) allocate recv obj to capture the log record
+	/*(1) allocate recv obj to capture the log record */
 	recv = static_cast<recv_t*>(
 		mem_heap_alloc(recv_line->heap, sizeof(recv_t)));
-	//recv = static_cast<recv_t*>(
-	//	malloc(sizeof(recv_t)));
 
 	recv->type = type;
 	recv->len = rec_end - body;
@@ -5466,9 +5503,11 @@ pm_ppl_recv_add_to_hash_table(
 	recv_addr_t *recv_addr;
 
 	if (it != space->m_pages.end()) {
+		/*found */
 		recv_addr = it->second;
 
 	} else {
+		/* recv_addr is not existed, create a new one */
 		recv_addr = static_cast<recv_addr_t *>(
 				mem_heap_alloc(space->m_heap, sizeof(*recv_addr)));
 
@@ -5484,13 +5523,15 @@ pm_ppl_recv_add_to_hash_table(
 
 		++recv_line->n_addrs;
 	}
-
+	/*Add the REDO log in the recv_addr's list*/
 	UT_LIST_ADD_LAST(recv_addr->rec_list, recv);
 
 	
-	//(3) recv_addr only has the header, now link it with the log record's body
+	/*(3) recv_addr only has the header, now link it with the log record's body */
 	prev_field = &(recv->data);
-	/* Store the log record body in chunks of less than UNIV_PAGE_SIZE: recv_line->heap grows into the buffer pool, and bigger chunks could not
+
+	/* Store the log record body in chunks of less than UNIV_PAGE_SIZE:
+	 * recv_line->heap grows into the buffer pool, and bigger chunks could not
 	be allocated */
 
 	while (rec_end > body) {
@@ -5504,8 +5545,6 @@ pm_ppl_recv_add_to_hash_table(
 		recv_data = static_cast<recv_data_t*>(
 			mem_heap_alloc(recv_line->heap,
 				       sizeof(recv_data_t) + len));
-		//recv_data = static_cast<recv_data_t*>(
-		//	malloc(sizeof(recv_data_t) + len));
 
 		*prev_field = recv_data;
 
@@ -6263,47 +6302,65 @@ pm_ppl_recv_apply_hashed_line(
 	recv_line->n_read_reqs = 0;
 	recv_line->n_read_done = 0;
 
-
 	cnt = 0;
 	cnt2 = 10;
 
 	n = recv_line->n_addrs;
 
+	/*for each space in the hashmap Spaces*/
 	for (const auto &space : *recv_line->spaces) {
-		bool dropped;
 
-		if (space.first != TRX_SYS_SPACE &&
-				!fil_tablespace_open_for_recovery(space.first)) {
-			/* Tablespace was dropped. It should not have been scanned unless it
-			   is an undo space that was under construction. */
-			ut_ad(!fil_tablespace_lookup_for_recovery(space.first) ||
-					fsp_is_undo_tablespace(space.first));
+		//bool dropped;
+		///*
+		// * Logic for APPLY phase:
+		// * 1) For each space in the recv_line
+		// * Open the space if it hasn't opened yet
+		// * For each page of that space in the recv_line's hashtable
+		// * */
+		//dropped = false;
 
-			dropped = true;
-		} else {
-			dropped = false;
-		}
-		//for each recv_addr_t in m_pages
+		//if (space.first != TRX_SYS_SPACE){
+		//	fil_space_t* space_tem = fil_space_get(space.first);
+
+		//	/*Open the space for recovery if needed*/
+		//	if (space_tem == nullptr){
+		//		bool is_open_success = fil_tablespace_open_for_recovery(space.first);
+		//		printf("===> DEBUG: fil_tablespace_open_for_recovery() space %u return %d\n", space.first, is_open_success);
+
+		//		if (!is_open_success){
+		//			ut_ad(!fil_tablespace_lookup_for_recovery(space.first) ||
+		//					fsp_is_undo_tablespace(space.first));
+		//			dropped = true;
+		//		}
+		//	} else {
+		//		/* In PL-NVM, multiple threads may call this function at the same time
+		//		 * if you come here, this space has already opened by another thread 
+		//		 * */
+		//	}
+
+		//}
+
+		/*for each page in the hashmap Pages */
 		for (auto pages : space.second.m_pages) {
-			ut_ad(pages.second->space == space.first);
+		//	ut_ad(pages.second->space == space.first);
 
-			if (dropped) {
-				pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
-				pages.second->state = RECV_DISCARDED;
-				recv_line->n_addrs--;
-				recv_line->n_skip_done++;
-				pmemobj_rwlock_unlock(pop, &recv_line->lock);	
-				continue;
-			}
+		//	if (dropped) {
+		//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+		//		pages.second->state = RECV_DISCARDED;
+		//		recv_line->n_addrs--;
+		//		recv_line->n_skip_done++;
+		//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+		//		continue;
+		//	}
 
-			if (pages.second->state == RECV_DISCARDED) {
-				pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
-				ut_a(recv_line->n_addrs);
-				recv_line->n_addrs--;
-				recv_line->n_skip_done++;
-				pmemobj_rwlock_unlock(pop, &recv_line->lock);	
-				continue;
-			}
+		//	if (pages.second->state == RECV_DISCARDED) {
+		//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+		//		ut_a(recv_line->n_addrs);
+		//		recv_line->n_addrs--;
+		//		recv_line->n_skip_done++;
+		//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+		//		continue;
+		//	}
 
 			//recv_apply_log_rec(pages.second);
 			/*simulate recv_apply_log_rec()*/

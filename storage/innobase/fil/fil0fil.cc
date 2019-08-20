@@ -5460,6 +5460,8 @@ bool fil_space_read_name_and_filepath(space_id_t space_id, char **name,
   shard->mutex_acquire();
 
   fil_space_t *space = shard->get_space_by_id(space_id);
+  //tdnguyen debug
+  printf("==== in fil_space_read_name_and_filepath space_id %u  space_is_null %d\n", space_id, (space ==nullptr));
 
   if (space != nullptr) {
     *name = mem_strdup(space->name);
