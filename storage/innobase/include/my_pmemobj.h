@@ -500,7 +500,7 @@ struct __pmem_page_part_log {
 	//we only use this lock to protect below values
 	PMEMrwlock		ckpt_lock;
 	PMEMrwlock		recv_lock;
-	uint64_t	max_oldest_lsn;
+	uint64_t	max_req_ckpt_lsn;
 	uint64_t	min_oldest_lsn;
 	uint64_t	ckpt_lsn;
 	/// end lock

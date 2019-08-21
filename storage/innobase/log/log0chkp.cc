@@ -565,7 +565,7 @@ pm_ppl_checkpoint(
 	uint32_t i,  n;
 	bool success;
 	lsn_t		oldest_lsn;
-	lsn_t		new_oldest;
+	lsn_t		req_ckpt_lsn;
 	lsn_t		min_oldest;
 	lsn_t		max_oldest;
 	PMEM_PAGE_LOG_HASHED_LINE* pline;
@@ -575,26 +575,28 @@ pm_ppl_checkpoint(
 	min_oldest = ULONG_MAX;
 	max_oldest = 0;
 	
-	new_oldest = ppl->max_oldest_lsn;
+	req_ckpt_lsn = ppl->max_req_ckpt_lsn;
 
-	float delta = (ppl->max_oldest_lsn - ppl->ckpt_lsn) * 1.0 / 1000000;
+	assert(req_ckpt_lsn > ppl->ckpt_lsn);
 
-	printf("PMEM_INFO: call pm_ppl_checkpoint new_oldest %zu ppl->ckpt_lsn %zu delta %f seconds \n",
-		   	new_oldest, ppl->ckpt_lsn, delta);
+	float delta = (ppl->max_req_ckpt_lsn - ppl->ckpt_lsn) * 1.0 / 1000000;
+
+	printf("PMEM_INFO: call pm_ppl_checkpoint req_ckpt_lsn %zu ppl->ckpt_lsn %zu delta %f seconds \n",
+		   	req_ckpt_lsn, ppl->ckpt_lsn, delta);
 	//TODO:	
 	/*(2) simulate fil_names_clear()*/
-	//pm_ppl_fil_names_clear(new_oldest);
+	//pm_ppl_fil_names_clear(req_ckpt_lsn);
 
-	/*(3) Write pages in buffer pool upto the ckpt_lsn*/
+	/*(3) Write pages in buffer pool upto the req_ckpt_lsn*/
 	/*simulate buf_flush_request_force() without call buf_flush_wait_flushed() as in log_preflush_pool_modified_pages() */
-	pm_ppl_buf_flush_request_force(new_oldest);
+	pm_ppl_buf_flush_request_force(req_ckpt_lsn);
 
 	//TODO: no wait in MySQL 8.0
-	//buf_flush_wait_flushed(new_oldest);
+	//buf_flush_wait_flushed(req_ckpt_lsn);
 
 	/* (5) update the global ckpt_lsn*/
 	pmemobj_rwlock_wrlock(pop, &ppl->ckpt_lock);
-	ppl->ckpt_lsn = new_oldest;
+	ppl->ckpt_lsn = req_ckpt_lsn;
 	//log_sys->last_checkpoint_lsn.store(ppl->ckpt_lsn);
 	pmemobj_rwlock_unlock(pop, &ppl->ckpt_lock);
 }
@@ -984,7 +986,7 @@ void log_checkpointer(log_t *log_ptr) {
 
     if (!do_some_work()) {
 #if defined (UNIV_PMEMOBJ_PART_PL)
-	  if (gb_pmw->ppl->max_oldest_lsn > gb_pmw->ppl->ckpt_lsn) {
+	  if (gb_pmw->ppl->max_req_ckpt_lsn > gb_pmw->ppl->ckpt_lsn) {
 		  /*In MySQL 8.0, we call checkpoint in log_checkpointer
 		   * thread instead of master thread as in MySQL 5.7*/
 		  pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);

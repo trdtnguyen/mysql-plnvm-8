@@ -4541,6 +4541,7 @@ pm_ppl_analysis(
 	uint64_t min_delta;
 	uint64_t max_delta;
 	uint64_t total_delta;
+	uint64_t min_write_off;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE* pline;
@@ -4591,13 +4592,20 @@ pm_ppl_analysis(
 					//plog_block->state = PMEM_FREE_BLOCK;
 					continue;
 				}
+				/*the minimum write offset of each pline*/
+				min_write_off = plog_block->start_diskaddr + plog_block->start_off;
+
 				/*add block->key into the per-line hashtable */
 				pm_ppl_hash_add(pline, plog_block, j);
 
-				if(low_watermark > 
-						(plog_block->start_diskaddr + plog_block->start_off)){
+				/*add min_write_off into the per-line sorted map*/
+				pline->offset_map->insert(
+						std::make_pair(min_write_off, j));
+
+				if(low_watermark > min_write_off) 
+				{
 				
-                    low_watermark = (plog_block->start_diskaddr + plog_block->start_off);
+                    low_watermark = min_write_off;
                     low_diskaddr = plog_block->start_diskaddr;
                     low_offset = plog_block->start_off;
 

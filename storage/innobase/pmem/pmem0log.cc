@@ -873,7 +873,7 @@ pm_ppl_init_in_mem(
 	char sbuf[256];
 
 	ppl->ckpt_lsn = 0;	
-	ppl->max_oldest_lsn = 0;
+	ppl->max_req_ckpt_lsn = 0;
 	ppl->min_oldest_lsn = ULONG_MAX;
 
 	n = ppl->n_buckets;	
@@ -1687,7 +1687,7 @@ retry:
 get_free_buf:
 		// (1.1) Get a free log buf
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
-	t1 = ut_time_us(NULL);
+		t1 = ut_time_us(NULL);
 #endif	
 		pfreepool = D_RW(ppl->free_pool);
 		pmemobj_rwlock_wrlock(pop, &pfreepool->lock);
@@ -1725,9 +1725,9 @@ get_free_buf:
 		TOID_ASSIGN(pline->logbuf, free_buf.oid);
 		
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
-	t2 = ut_time_us(NULL);
-	pline->log_flush_lock_wait_time += (t2 - t1);
-	pline->n_log_flush++;
+		t2 = ut_time_us(NULL);
+		pline->log_flush_lock_wait_time += (t2 - t1);
+		pline->n_log_flush++;
 #endif	
 		//move the diskaddr on the line ahead, the written size should be aligned with 512B for DIRECT_IO works
 		pline->diskaddr += plogbuf->size;
@@ -1937,7 +1937,6 @@ get_free_buf:
 			pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
 			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
 			pmemobj_rwlock_unlock(pop, &pline->meta_lock);
-
 		}
 
 		plog_block->lastLSN = rec_lsn;
@@ -1952,488 +1951,9 @@ get_free_buf:
 	//pmemobj_rwlock_unlock(pop, &pline->lock);
 }
 
-uint64_t
-pm_ppl_write_rec_v2(
-			PMEMobjpool*		pop,
-			PMEM_PAGE_PART_LOG*	ppl,
-			uint64_t			key,
-			byte*				log_src,
-			uint32_t			rec_size)
-{
-	uint32_t					n;
-	PMEM_PAGE_LOG_HASHED_LINE*	pline;
-	PMEM_PAGE_LOG_FREE_POOL*	pfreepool;
-	PMEM_PAGE_LOG_BUF*			plogbuf;
-	PMEM_PAGE_LOG_BLOCK*		plog_block;
-	plog_hash_t*				item;
-
-	ulint hashed;
-	byte* log_des;
-	byte* temp;
-	
-	mlog_id_t type;
-	uint32_t space, page_no; //MySQL 8.0
-	//ulint space, page_no; //MySQL 5.7
-	uint16_t check_size;
-	
-	uint64_t rec_lsn;
-	uint64_t write_off;
-	//uint64_t old_off;
-	
-	assert(rec_size > 0);
-
-	temp = mlog_parse_initial_log_record(
-			log_src, log_src + rec_size, &type, &space, &page_no);
-	check_size = mach_read_from_2(temp);
-
-	assert (check_size == rec_size);
-	assert (type < MLOG_BIGGEST_TYPE);
-	temp += 2;
-	
-	/*The last bucket is reserved for space 0*/	
-	n = ppl->n_buckets;
-
-	PMEM_LOG_HASH_KEY(hashed, key, n);
-
-	assert(hashed < n);
-
-retry:
-	pline = D_RW(D_RW(ppl->buckets)[hashed]);
-	plogbuf = D_RW(pline->logbuf);
-	
-	/*WARNING this lock may become bottle neck*/
-	pmemobj_rwlock_wrlock(pop, &pline->lock);
-
-	//if (plogbuf->state == PMEM_LOG_BUF_IN_FLUSH)
-	//if (pline->is_flushing)
-	if (pline->is_flushing ||
-		plogbuf->state == PMEM_LOG_BUF_IN_FLUSH)
-	{
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		/*wait for a logbuf available*/
-		os_event_wait(pline->log_flush_event);
-		/*wake up, the plogbuf may changed, better to re-acquire it*/
-		goto retry;
-	}	
-
-	/*(2) Get the plogblock*/	
-	//item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
-	//assert(item->block_off < pline->max_blocks);
-	//plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-	//assert(plog_block);
-
-	////assign LSN
-	//rec_lsn = ut_time_us(NULL);	
-	//mach_write_to_8(temp, rec_lsn);
-
-	////////////////////////////////////////////
-	// (1) Handle full log buf (if any)
-	// /////////////////////////////////////////
-	if (plogbuf->cur_off + rec_size > plogbuf->size) {
-		pline->is_flushing = true;
-		os_event_reset(pline->log_flush_event);
-get_free_buf:
-		// (1.1) Get a free log buf
-		pfreepool = D_RW(ppl->free_pool);
-		pmemobj_rwlock_wrlock(pop, &pfreepool->lock);
-
-		TOID(PMEM_PAGE_LOG_BUF) free_buf = POBJ_LIST_FIRST (&pfreepool->head);
-		if (pfreepool->cur_free_bufs == 0 || 
-				TOID_IS_NULL(free_buf)){
-			//no empty free logbuf, wait for an available one
-			pmemobj_rwlock_unlock(pop, &pfreepool->lock);
-			os_event_wait(ppl->free_log_pool_event);
-			goto get_free_buf;
-		}
-		POBJ_LIST_REMOVE(pop, &pfreepool->head, free_buf, list_entries);
-		pfreepool->cur_free_bufs--;
-		
-		os_event_reset(ppl->free_log_pool_event);
-		pmemobj_rwlock_unlock(pop, &pfreepool->lock);
-
-		assert(D_RW(free_buf)->cur_off == PMEM_LOG_BUF_HEADER_SIZE);
-		assert(D_RW(free_buf)->n_recs == 0);
-
-		/* (1.2) insert free logbuf into the head*/
-		TOID_ASSIGN(D_RW(free_buf)->prev, pline->logbuf.oid);
-		TOID_ASSIGN(D_RW(pline->logbuf)->next, free_buf.oid);
-		TOID_ASSIGN(pline->logbuf, free_buf.oid);
-		
-		//test
-		if ( D_RW(plogbuf->prev) != NULL){
-			printf("PMEM_WARN: there is another in-flushing logbuf id %zu before this full logbuf %zu pline %zu\n", D_RW(plogbuf->prev)->id, plogbuf->id, plogbuf->hashed_id);
-		}
-		//move the diskaddr on the line ahead, the written size should be aligned with 512B for DIRECT_IO works
-		pline->diskaddr += plogbuf->size;
-
-		/*(2) Get the plogblock*/	
-		item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
-		assert(item->block_off < pline->max_blocks);
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-		assert(plog_block);
-
-		//assign LSN
-		rec_lsn = ut_time_us(NULL);	
-		mach_write_to_8(temp, rec_lsn);
-
-		// (1.3) update plog_block
-		if (plog_block->firstLSN == 0){
-			//first write
-			plog_block->start_off = D_RW(free_buf)->cur_off;
-			plog_block->start_diskaddr = pline->diskaddr;
-			plog_block->firstLSN = rec_lsn;
-
-			plog_block->first_rec_size = rec_size;
-			plog_block->first_rec_type = type;
-
-			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
-			}
-			//test
-			/*insert the pair (offset, bid) into the set*/
-			write_off = plog_block->start_diskaddr + plog_block->start_off;
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
-
-		}
-		plog_block->lastLSN = rec_lsn;
-
-		// (1.4) write log rec on new buf
-		D_RW(free_buf)->hashed_id = pline->hashed_id; 
-		
-		log_des = ppl->p_align + D_RW(free_buf)->pmemaddr + D_RW(free_buf)->cur_off;
-
-		pm_write_log_rec_low(pop,
-				log_des,
-				log_src,
-				rec_size);
-		D_RW(free_buf)->n_recs++;
-
-		D_RW(free_buf)->state = PMEM_LOG_BUF_IN_USED;
-		D_RW(free_buf)->diskaddr = pline->diskaddr;
-
-		/*IMPORTANT: always update offset after updating plog_block*/
-		D_RW(free_buf)->cur_off += rec_size;
-
-		// (1.5) write the header. This header is needed when recovery,
-		byte* header = ppl->p_align + plogbuf->pmemaddr + 0;
-		byte* ptr = header;
-		mach_write_to_4(ptr, plogbuf->cur_off);
-		ptr += 4;
-
-		mach_write_to_4(ptr, plogbuf->n_recs);
-		ptr += 4;
-
-		//fill zero the un-used len
-		uint64_t dif_len = plogbuf->size - plogbuf->cur_off;
-		if (dif_len > 0) {
-			memset(header + plogbuf->cur_off, 0, dif_len);
-		}
-
-		// (1.6) assign a pointer in the flusher to the full log buf, this function return immediately 
-		pm_log_buf_assign_flusher(ppl, plogbuf);
-
-		pline->is_flushing = false;
-		os_event_set(pline->log_flush_event);
-
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		return rec_lsn;
-	}
-	else { 
-		/*we only lock the line when necessary*/
-		//pmemobj_rwlock_unlock(pop, &pline->lock);
-
-		//plogbuf->cur_off += rec_size;
-		/*(2) Get the plogblock*/	
-		item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
-		assert(item->block_off < pline->max_blocks);
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-		assert(plog_block);
-
-		//assign LSN
-		rec_lsn = ut_time_us(NULL);	
-		mach_write_to_8(temp, rec_lsn);
-		//update plog_block
-		if (plog_block->firstLSN == 0){
-			//first write
-			plog_block->start_off = plogbuf->cur_off;
-			//plog_block->start_off = old_off;
-			plog_block->start_diskaddr = pline->diskaddr;
-			plog_block->firstLSN = rec_lsn;
-
-			plog_block->first_rec_size = rec_size;
-			plog_block->first_rec_type = type;
-
-			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
-			}
-			//test
-			/*insert the pair (offset, bid) into the set*/
-			write_off = plog_block->start_diskaddr + plog_block->start_off;
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
-		}
-
-		plog_block->lastLSN = rec_lsn;
-
-		log_des = ppl->p_align + plogbuf->pmemaddr + plogbuf->cur_off;
-		pm_write_log_rec_low(pop,
-				log_des,
-				log_src,
-				rec_size);
-
-		plogbuf->n_recs++;
-		if (plogbuf->cur_off == PMEM_LOG_BUF_HEADER_SIZE)		  {
-			//this is the first write on this logbuf
-			plogbuf->state = PMEM_LOG_BUF_IN_USED;
-		}
-
-		/*IMPORTANT: always update offset after updating plog_block*/
-		//old_off = plogbuf->cur_off;
-		plogbuf->cur_off += rec_size;
-
-		/* compute ckpt_lsn for this line (in necessary) */
-
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		if (!pline->is_req_checkpoint){
-			pm_ppl_check_for_ckpt(pop, ppl, pline, plogbuf, rec_lsn);
-		}
-
-		return rec_lsn;
-	} //end handle regular logbuf
-
-}
-uint64_t
-pm_ppl_write_rec_old(
-			PMEMobjpool*		pop,
-			PMEM_PAGE_PART_LOG*	ppl,
-			uint64_t			key,
-			byte*				log_src,
-			uint32_t			rec_size)
-{
-	uint32_t					n;
-	PMEM_PAGE_LOG_HASHED_LINE*	pline;
-	PMEM_PAGE_LOG_FREE_POOL*	pfreepool;
-	PMEM_PAGE_LOG_BUF*			plogbuf;
-	PMEM_PAGE_LOG_BLOCK*		plog_block;
-	plog_hash_t*				item;
-
-	ulint hashed;
-	byte* log_des;
-	byte* temp;
-	
-	mlog_id_t type;
-	uint32_t space, page_no; //MySQL 8.0
-	//ulint space, page_no; //MySQL 5.7
-	uint16_t check_size;
-	
-	uint64_t rec_lsn;
-	uint64_t write_off;
-	
-	assert(rec_size > 0);
-
-	temp = mlog_parse_initial_log_record(
-			log_src, log_src + rec_size, &type, &space, &page_no);
-	check_size = mach_read_from_2(temp);
-
-	assert (check_size == rec_size);
-	assert (type < MLOG_BIGGEST_TYPE);
-	temp += 2;
-	
-	/*The last bucket is reserved for space 0*/	
-	n = ppl->n_buckets;
-
-	PMEM_LOG_HASH_KEY(hashed, key, n);
-
-	assert(hashed < n);
-
-retry:
-	pline = D_RW(D_RW(ppl->buckets)[hashed]);
-	plogbuf = D_RW(pline->logbuf);
-	
-	/*WARNING this lock may become bottle neck*/
-	pmemobj_rwlock_wrlock(pop, &pline->lock);
-
-	if (plogbuf->state == PMEM_LOG_BUF_IN_FLUSH)
-	//if (pline->is_flushing)
-	{
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		/*wait for a logbuf available*/
-		//os_event_wait(pline->log_flush_event);
-		/*wake up, the plogbuf may changed, better to re-acquire it*/
-		goto retry;
-	}	
-
-	/*(2) Get the plogblock*/	
-
-	/*if the hash key has already exist, get it
-	otherwise, create the new item and add into the hashtable	
-Note: After pm_ppl_hash_add, plog_block->state = PMEM_IN_USED_BLOCK and is_free == false, however, the log rec has not written to logbuf yet!
-	*/
-	item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
-	assert(item->block_off < pline->max_blocks);
-
-	/*acquire lock on plogblock is not necessary
-	 * plog_block->is_free is false after pm_ppl_hash_check_and_add()*/
-	plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-	assert(plog_block);
-
-	//assign LSN
-	rec_lsn = ut_time_us(NULL);	
-	mach_write_to_8(temp, rec_lsn);
-
-	////////////////////////////////////////////
-	// (1) Handle full log buf (if any)
-	// /////////////////////////////////////////
-	if (plogbuf->cur_off + rec_size > plogbuf->size) {
-get_free_buf:
-		// (1.1) Get a free log buf
-		pfreepool = D_RW(ppl->free_pool);
-		pmemobj_rwlock_wrlock(pop, &pfreepool->lock);
-
-		TOID(PMEM_PAGE_LOG_BUF) free_buf = POBJ_LIST_FIRST (&pfreepool->head);
-		if (pfreepool->cur_free_bufs == 0 || 
-				TOID_IS_NULL(free_buf)){
-			//no empty free logbuf, wait for an available one
-			pmemobj_rwlock_unlock(pop, &pfreepool->lock);
-			os_event_wait(ppl->free_log_pool_event);
-			goto get_free_buf;
-		}
-		POBJ_LIST_REMOVE(pop, &pfreepool->head, free_buf, list_entries);
-		pfreepool->cur_free_bufs--;
-		
-		os_event_reset(ppl->free_log_pool_event);
-		pmemobj_rwlock_unlock(pop, &pfreepool->lock);
-
-		assert(D_RW(free_buf)->cur_off == PMEM_LOG_BUF_HEADER_SIZE);
-		assert(D_RW(free_buf)->n_recs == 0);
-
-		/* (1.2) insert free logbuf into the head*/
-		TOID_ASSIGN(D_RW(free_buf)->prev, pline->logbuf.oid);
-		TOID_ASSIGN(D_RW(pline->logbuf)->next, free_buf.oid);
-		TOID_ASSIGN(pline->logbuf, free_buf.oid);
-		
-		//test
-		if ( D_RW(plogbuf->prev) != NULL){
-			printf("PMEM_WARN: there is another in-flushing logbuf id %zu before this full logbuf %zu pline %zu\n", D_RW(plogbuf->prev)->id, plogbuf->id, plogbuf->hashed_id);
-		}
-		//move the diskaddr on the line ahead, the written size should be aligned with 512B for DIRECT_IO works
-		pline->diskaddr += plogbuf->size;
-
-		// (1.3) update plog_block
-		if (plog_block->firstLSN == 0){
-			//first write
-			plog_block->start_off = D_RW(free_buf)->cur_off;
-			plog_block->start_diskaddr = pline->diskaddr;
-			plog_block->firstLSN = rec_lsn;
-
-			plog_block->first_rec_size = rec_size;
-			plog_block->first_rec_type = type;
-
-			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
-			}
-			//test
-			/*insert the pair (offset, bid) into the set*/
-			write_off = plog_block->start_diskaddr + plog_block->start_off;
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
-
-		}
-		plog_block->lastLSN = rec_lsn;
-
-		// (1.4) write log rec on new buf
-		D_RW(free_buf)->hashed_id = pline->hashed_id; 
-		
-		log_des = ppl->p_align + D_RW(free_buf)->pmemaddr + D_RW(free_buf)->cur_off;
-
-		pm_write_log_rec_low(pop,
-				log_des,
-				log_src,
-				rec_size);
-		D_RW(free_buf)->n_recs++;
-
-		D_RW(free_buf)->state = PMEM_LOG_BUF_IN_USED;
-		D_RW(free_buf)->diskaddr = pline->diskaddr;
-
-		/*IMPORTANT: always update offset after updating plog_block*/
-		D_RW(free_buf)->cur_off += rec_size;
-
-		// (1.5) write the header. This header is needed when recovery,
-		byte* header = ppl->p_align + plogbuf->pmemaddr + 0;
-		byte* ptr = header;
-		mach_write_to_4(ptr, plogbuf->cur_off);
-		ptr += 4;
-
-		mach_write_to_4(ptr, plogbuf->n_recs);
-		ptr += 4;
-
-		//fill zero the un-used len
-		uint64_t dif_len = plogbuf->size - plogbuf->cur_off;
-		if (dif_len > 0) {
-			memset(header + plogbuf->cur_off, 0, dif_len);
-		}
-
-		// (1.6) assign a pointer in the flusher to the full log buf, this function return immediately 
-		pm_log_buf_assign_flusher(ppl, plogbuf);
-
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		return rec_lsn;
-	}
-	else { 
-		/*we only lock the line when necessary*/
-		//pmemobj_rwlock_unlock(pop, &pline->lock);
-
-		//update plog_block
-		if (plog_block->firstLSN == 0){
-			//first write
-			plog_block->start_off = plogbuf->cur_off;
-			plog_block->start_diskaddr = pline->diskaddr;
-			plog_block->firstLSN = rec_lsn;
-
-			plog_block->first_rec_size = rec_size;
-			plog_block->first_rec_type = type;
-
-			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
-			}
-			//test
-			/*insert the pair (offset, bid) into the set*/
-			write_off = plog_block->start_diskaddr + plog_block->start_off;
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
-		}
-
-		plog_block->lastLSN = rec_lsn;
-
-		log_des = ppl->p_align + plogbuf->pmemaddr + plogbuf->cur_off;
-		pm_write_log_rec_low(pop,
-				log_des,
-				log_src,
-				rec_size);
-
-		plogbuf->n_recs++;
-		if (plogbuf->cur_off == PMEM_LOG_BUF_HEADER_SIZE)		  {
-			//this is the first write on this logbuf
-			plogbuf->state = PMEM_LOG_BUF_IN_USED;
-		}
-
-		/*IMPORTANT: always update offset after updating plog_block*/
-		plogbuf->cur_off += rec_size;
-
-		/* compute ckpt_lsn for this line (in necessary) */
-		if (!pline->is_req_checkpoint){
-			pm_ppl_check_for_ckpt(pop, ppl, pline, plogbuf, rec_lsn);
-		}
-
-		pmemobj_rwlock_unlock(pop, &pline->lock);
-		return rec_lsn;
-	} //end handle regular logbuf
-
-}
 /*
  * Check and compute the ckpt_lsn value if the logbuf's tail go too far from the head
- * Later, the master thread (1s interval) will call checkpoint based on this value 
+ * Later, the master thread (MySQL 5.7) or checkpointer thread (MySQL 8.0) (1s interval) will call checkpoint based on this value 
  * The caller thread response for holding the pline->lock
  * See log_preflush_pool_modified_pages() in InnoDB
  * */
@@ -2464,13 +1984,14 @@ pm_ppl_check_for_ckpt(
 	assert (plog_block_oldest);
 	
 	oldest_off = plog_block_oldest->start_diskaddr + plog_block_oldest->start_off;
-	//cur_off = plogbuf->diskaddr + plogbuf->cur_off;
 	cur_off = pline->diskaddr + plogbuf->cur_off;
 	age = cur_off - oldest_off;
 	
 	/* we only set ckpt_lsn if it has not set yet */
 	if ( age > PMEM_CKPT_MAX_OFFSET) {
-
+		/*The logic of is_req_checkpoint flag:
+		 * 1) when this flag is on, trx threads will not call this function during writing REDO log 
+		 * 2) set this flag to false only the oldest page managed by this pline is flush to disk, see pm_ppl_flush_page()*/
 		pline->is_req_checkpoint = true;	
 
 		/*now compute the checkpoint lsn for this pline */
@@ -2493,9 +2014,8 @@ pm_ppl_check_for_ckpt(
 		
 		//update the global checkpoint lsn	
 		pmemobj_rwlock_wrlock(pop, &ppl->ckpt_lock);
-		if (ppl->max_oldest_lsn < pline->ckpt_lsn){
-			ppl->max_oldest_lsn = pline->ckpt_lsn;
-			//pmemobj_persist(pop, &ppl->max_oldest_lsn, sizeof(ppl->max_oldest_lsn));
+		if (ppl->max_req_ckpt_lsn < pline->ckpt_lsn){
+			ppl->max_req_ckpt_lsn = pline->ckpt_lsn;
 		}
 
 		//printf("SET is_req_checkpoint to true pline %zu \n", pline->hashed_id);
@@ -3964,6 +3484,7 @@ pm_ppl_flush_page(
 		}
 		else {
 			/*write_off is not found, logical error*/
+			printf("==> logical error write_off %zu is not existed in offset_map of pline %zu\n", write_off, pline->hashed_id);
 			assert(0);
 		}
 
@@ -3974,6 +3495,7 @@ pm_ppl_flush_page(
 
 			/*Method 2: use std::map */
 			min_off = ULONG_MAX;
+
 			if (pline->offset_map->size() > 0){
 				/* get the next min offset*/
 				it = pline->offset_map->begin();
@@ -3992,6 +3514,7 @@ pm_ppl_flush_page(
 				}
 
 				if (pline->is_req_checkpoint){
+					/*The checkpoint request condition*/
 					if (pmin_log_block->firstLSN > pline->ckpt_lsn){
 						pline->is_req_checkpoint = false;
 					}
