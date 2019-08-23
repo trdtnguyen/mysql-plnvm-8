@@ -612,7 +612,7 @@ struct __pmem_page_log_hashed_line {
 	uint64_t		write_diskaddr; //diskaddr that log recs are durable write write_diskaddr < diskaddr
 
 	/*for checkpoint*/	
-	uint32_t		oldest_block_off;//offset of the block has min (start_diskaddr + start_off)
+	uint32_t		oldest_block_id;//id of the block has min (start_diskaddr + start_off)
 	uint64_t		ckpt_lsn;
 	bool			is_req_checkpoint;
 

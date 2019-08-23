@@ -280,7 +280,7 @@ pm_page_part_log_bucket_reset(
 		pline->write_diskaddr = 0;
 		
 		pline->ckpt_lsn = 0;
-		pline->oldest_block_off = UINT32_MAX;
+		pline->oldest_block_id = UINT32_MAX;
 		pline->is_req_checkpoint = false;
 		
 		// (4) logbuf
@@ -967,7 +967,7 @@ pm_page_part_log_bucket_init(
 		pline->write_diskaddr = 0;
 		
 		pline->ckpt_lsn = 0;
-		pline->oldest_block_off = UINT32_MAX;
+		pline->oldest_block_id = UINT32_MAX;
 		pline->is_req_checkpoint = false;
 
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
@@ -1922,11 +1922,11 @@ get_free_buf:
 		PMEM_DELAY(start_cycle, end_cycle, 5 * pmw->PMEM_SIM_CPU_CYCLES); 
 #endif
 			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				//pline->oldest_block_off = item->block_off;
-				pline->oldest_block_off = plog_block->id;
+			if (pline->oldest_block_id == UINT32_MAX) {
+
+				pline->oldest_block_id = plog_block->id;
 #if defined (UNIV_PMEMOBJ_PERSIST)
-				pmemobj_persist(pop, &pline->oldest_block_off, sizeof(pline->oldest_block_off));
+				pmemobj_persist(pop, &pline->oldest_block_id, sizeof(pline->oldest_block_id));
 #endif
 
 #if defined (UNIV_PMEM_SIM_LATENCY)
@@ -2030,11 +2030,11 @@ get_free_buf:
 		PMEM_DELAY(start_cycle, end_cycle, 5 * pmw->PMEM_SIM_CPU_CYCLES); 
 #endif
 			//update the oldest
-			if (pline->oldest_block_off == UINT32_MAX) {
-				//pline->oldest_block_off = item->block_off;
-				pline->oldest_block_off = plog_block->id;
+			if (pline->oldest_block_id == UINT32_MAX) {
+
+				pline->oldest_block_id = plog_block->id;
 #if defined (UNIV_PMEMOBJ_PERSIST)
-				pmemobj_persist(pop, &pline->oldest_block_off, sizeof(pline->oldest_block_off));
+				pmemobj_persist(pop, &pline->oldest_block_id, sizeof(pline->oldest_block_id));
 #endif
 #if defined (UNIV_PMEM_SIM_LATENCY)
 				PMEM_DELAY(start_cycle, end_cycle, pmw->PMEM_SIM_CPU_CYCLES); 
@@ -2085,14 +2085,14 @@ pm_ppl_check_for_ckpt(
 
 	PMEM_PAGE_LOG_BLOCK*	plog_block_oldest;
 	
-	if (pline->oldest_block_off == UINT32_MAX){
+	if (pline->oldest_block_id == UINT32_MAX){
 		//there is no log recs in this partition, nothing to do
 		return;
 	}
 
 	assert(!pline->is_req_checkpoint);
 
-	plog_block_oldest = D_RW(D_RW(pline->arr)[pline->oldest_block_off]);
+	plog_block_oldest = D_RW(D_RW(pline->arr)[pline->oldest_block_id]);
 	assert (plog_block_oldest);
 	
 	oldest_off = plog_block_oldest->start_diskaddr + plog_block_oldest->start_off;
@@ -3576,6 +3576,8 @@ pm_ppl_flush_page(
 
 		__reset_page_log_block(plog_block);
 
+		pmemobj_rwlock_unlock(pop, &plog_block->lock);
+
 #if defined (UNIV_PMEMOBJ_PERSIST)
 		pmemobj_persist(pop, plog_block, sizeof(PMEM_PAGE_LOG_BLOCK));
 #endif
@@ -3584,13 +3586,13 @@ pm_ppl_flush_page(
 		/*the reset function takes 12 accesses*/
 		PMEM_DELAY(start_cycle, end_cycle, 12 * pmw->PMEM_SIM_CPU_CYCLES); 
 #endif
-		pmemobj_rwlock_unlock(pop, &plog_block->lock);
 
 		/*remove corresponding keys from key_map*/
 		pline->key_map->erase(key_it);
 
 		/*remove corresponding offset from offset_map*/
 		auto offset_it = pline->offset_map->find(write_off);
+
 		if (offset_it != pline->offset_map->end()){
 			pline->offset_map->erase(offset_it);
 		}
@@ -3600,9 +3602,8 @@ pm_ppl_flush_page(
 			assert(0);
 		}
 
-		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 
-		if (block_id == pline->oldest_block_off)
+		if (block_id == pline->oldest_block_id)
 		{
 
 			if (pline->offset_map->size() > 0){
@@ -3628,12 +3629,17 @@ pm_ppl_flush_page(
 						pline->is_req_checkpoint = false;
 					}
 				}
+
+				/*update the oldest_block_id for this pline*/
+				pline->oldest_block_id = pmin_log_block->id;
 			}
 			else {
-				pline->oldest_block_off = ULONG_MAX;	
+				pline->oldest_block_id = ULONG_MAX;	
 				pline->is_req_checkpoint = false;
 			}
 		}
+
+		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 
 	} //end if 
 	else {
@@ -3641,11 +3647,12 @@ pm_ppl_flush_page(
 		 * do nothing
 		 * */
 	}
+
 	return;
 }
 
 /*
- * Update the oldest_block_off in pline
+ * Update the oldest_block_id in pline
  * Called in pm_ppl_flush_page()
  * The caller reponse for holding the pline->lock
  * */
@@ -3661,12 +3668,12 @@ pm_ppl_update_oldest(
 
 	uint64_t min_off;
 	uint64_t tem_off;
-	uint64_t oldest_block_off;
+	uint64_t oldest_block_id;
 	uint64_t oldest_lsn;
 
 	PMEM_PAGE_LOG_BLOCK*	plog_block;
 
-	oldest_block_off = UINT32_MAX;
+	oldest_block_id = UINT32_MAX;
 	min_off = ULONG_MAX;
 	oldest_lsn = 0;
 
@@ -3678,11 +3685,11 @@ pm_ppl_update_oldest(
 		if (!plog_block->is_free &&
 			   	min_off > tem_off){
 			min_off = tem_off;
-			oldest_block_off = i;	
+			oldest_block_id = i;	
 			oldest_lsn = plog_block->firstLSN;
 		}
 	}
-	pline->oldest_block_off = oldest_block_off;
+	pline->oldest_block_id = oldest_block_id;
 	
 	if (min_off == ULONG_MAX){
 		pline->is_req_checkpoint = false;
