@@ -5419,6 +5419,7 @@ pm_ppl_recv_parse_log_rec(
 }
 
 /*simulate recv_sys_empty_hash()
+ * Empty the pline's hashtable after all REDO log records in this pline are redone
  *used for both global recv_line and partition recv_line
 pline: NULL - use global recv_line
  * */
@@ -5454,11 +5455,6 @@ pm_ppl_recv_line_empty_hash(
 	using Spaces = recv_sys_t::Spaces;
 
 	recv_line->spaces = UT_NEW(Spaces(), mem_log_recv_space_hash_key);
-
-	//hash_table_free(recv_line->addr_hash);
-	//mem_heap_empty(recv_line->heap);
-
-	//recv_line->addr_hash = hash_create(size);
 }
 
 /*simulate recv_add_to_hash_table()
@@ -5719,26 +5715,9 @@ pm_ppl_recv_recover_page_func(
 		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 		return;
 	}
-#ifndef UNIV_HOTBACKUP
-	ut_ad(recv_needed_recovery);
-
-	DBUG_PRINT("ib_log",
-		   ("Applying log to page %u:%u",
-		    recv_addr->space, recv_addr->page_no));
-#endif /* !UNIV_HOTBACKUP */
-
-	/*the state should be RECV_NOT_PRECESSED or RECV_BEING_READ_*/
-	//if (recv_line->hashed_id == 0)	
-	//printf("START recover_page_func() recv_addr (%zu, %zu) recv_line %zu n_addrs %zu n_read_reqs %zu n_read_done %zu n_cache %zu n_skip %zu\n",
-	//		block->page.id.space(), block->page.id.page_no(), recv_line->hashed_id,
-	//	   	recv_line->n_addrs,
-	//	   	recv_line->n_read_reqs,
-	//	   	recv_line->n_read_done,
-	//	   	recv_line->n_cache_done,
-	//	   	recv_line->n_skip_done
-	//		);
 
 	buf_page_t bpage = block->page;
+
 	if (!fsp_is_system_temporary(bpage.id.space()) &&
 			(arch_page_sys != nullptr && arch_page_sys->is_active())) {
 		page_t *frame;
@@ -5755,6 +5734,7 @@ pm_ppl_recv_recover_page_func(
 	}
 
 	recv_addr->state = RECV_BEING_PROCESSED;
+
 	pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 
 	mtr_start(&mtr);
@@ -5803,6 +5783,7 @@ pm_ppl_recv_recover_page_func(
 	//parse and apply each recv in the hashtable
 	//ulint prev_start_lsn = 0;
 	prev_recv = NULL;	
+
 	for (auto recv = UT_LIST_GET_FIRST(recv_addr->rec_list); recv != nullptr;
 			recv = UT_LIST_GET_NEXT(rec_list, recv)) {
 #ifndef UNIV_HOTBACKUP
@@ -5892,7 +5873,7 @@ pm_ppl_recv_recover_page_func(
 
 	if (modification_to_page) {
 		ut_a(block);
-		buf_flush_recv_note_modification(block, start_lsn, start_lsn);
+		buf_flush_recv_note_modification(block, start_lsn, end_lsn);
 	}
 
 	/* Make sure that committing mtr does not change the modification lsn values of page */
@@ -5908,38 +5889,32 @@ pm_ppl_recv_recover_page_func(
 	recv_addr->state = RECV_PROCESSED;
 
 	pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+
 	ut_a(recv_line->n_addrs);
+
 	recv_line->n_addrs--;
 
-	//printf("END recover_page_func() recv_addr (%zu, %zu) recv_line %zu n_addrs %zu n_read_reqs %zu n_read_done %zu n_cache %zu n_skip %zu\n",
-	//		block->page.id.space(), block->page.id.page_no(), recv_line->hashed_id,
-	//	   	recv_line->n_addrs,
-	//	   	recv_line->n_read_reqs,
-	//	   	recv_line->n_read_done,
-	//	   	recv_line->n_cache_done,
-	//	   	recv_line->n_skip_done
-	//		);
-
-	//printf("recover_page_func() recv_line %zu n_addrs %zu\n", recv_line->hashed_id, recv_line->n_addrs);
 	/*the last IO thread handle post-processing*/
-	//if (recv_line->n_addrs == 0 ||
-	//	recv_line->n_read_done == recv_line->n_read_reqs)
 
 	if (recv_line->n_addrs == 0)
 	{
 		recv_line->apply_log_recs = FALSE;
 		recv_line->apply_batch_on = FALSE;
+
 		//simulate recv_sys_empty_hash()
 		pm_ppl_recv_line_empty_hash(pop, ppl, pline);
 		
-		/*update the total redoing lines and wake the main recovery thread when it is the last redoing line*/
+		/*update the total redoing lines 
+		 * The last finished redo pline response for waking up the main recovery thread*/
 		pmemobj_rwlock_wrlock(pop, &ppl->recv_lock);	
+
 		ppl->n_redoing_lines--;
+
 		printf("PMEM_RECV: ppl->n_redoing_lines %d \n", ppl->n_redoing_lines);
 		if (ppl->n_redoing_lines == 0){
-			//this is the last redoing line
 			os_event_set(ppl->redoing_done_event);
 		}
+
 		pmemobj_rwlock_unlock(pop, &ppl->recv_lock);	
 	}
 
