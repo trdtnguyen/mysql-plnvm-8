@@ -191,7 +191,7 @@ pm_wrapper_page_log_alloc_or_open(
 	pmw->ppl->free_log_pool_event = os_event_create("pm_free_log_pool_event");
 	pmw->ppl->redoing_done_event = os_event_create("pm_is_redoing_done_event");
 	
-	pm_page_part_log_hash_create(pmw->pop, pmw->ppl);
+	//pm_page_part_log_hash_create(pmw->pop, pmw->ppl);
 
 	pmw->ppl->deb_file = fopen("part_log_debug.txt","a");
 }
@@ -886,7 +886,9 @@ pm_ppl_init_in_mem(
 		sprintf(sbuf,"pm_line_log_flush_event%zu", i);
 		pline->log_flush_event = os_event_create(sbuf);
 		/*the map*/
-		pline->offset_map = new std::map<uint64_t, uint32_t>();
+		//pline->offset_map = new std::map<uint64_t, uint32_t>();
+		pline->key_map = new KEY_MAP();
+		pline->offset_map = new OFFSET_MAP();
 	}
 }
 
@@ -1189,7 +1191,8 @@ pm_page_part_log_hash_create(
 
 	for (i = 0; i < n; i++) {
 		pline = D_RW(D_RW(ppl->buckets)[i]);
-		pline->addr_hash = hash_create(k);
+		//pline->addr_hash = hash_create(k);
+		pline->key_map = new KEY_MAP();
 	}
 }
 
@@ -1203,21 +1206,22 @@ pm_page_part_log_hash_free(
 
 	for (i = 0; i < ppl->n_buckets; i++) {
 		pline = D_RW(D_RW(ppl->buckets)[i]);
-		hash_table_free(pline->addr_hash);
+		//hash_table_free(pline->addr_hash);
+		free (pline->key_map);
 	}
 }
 
 
 /*
- * Add key to hashtable if it is not in
+ * Add key to pline's hashtable if it hasn't exit yet
  * The caller reponse for holding the pline->lock
  * @param[in] pop
  * @param[in] ppl
  * @param[in] pline
  * @param[in] key
- * @return pointer to the item in hashtable
+ * @return pointer to the found log_block or the new added one
  * */
-plog_hash_t*
+PMEM_PAGE_LOG_BLOCK*
 pm_ppl_hash_check_and_add(
 		PMEMobjpool*				pop,
 		PMEM_PAGE_PART_LOG*			ppl,
@@ -1226,118 +1230,200 @@ pm_ppl_hash_check_and_add(
 {
 	uint64_t i;
 	int64_t n_try;
-	int64_t i_bit;
-
+	
 	PMEM_PAGE_LOG_BLOCK*	plog_block;
-	plog_hash_t* item;
+	
+	plog_block = pm_ppl_hash_get(pop, ppl, pline, key);
 
-	item = pm_ppl_hash_get(pop, ppl, pline, key);
-	i_bit = -2; //init value 
+	if (plog_block != NULL){
+		/*found*/
+		return plog_block;
+	} else {
+		/*search a free entry in the pline */
 
-	if (item == NULL){
-		/*key is not in hashtable.
-		 * select a free plogbuf in page-partition for this key*/
-		item = (plog_hash_t*) malloc(sizeof(plog_hash_t));
-		item->key = key;
 retry:
-		if (USE_BIT_ARRAY) {
-			/* (1) Method 1: search the free entry by hash the key then sequential search */
-			PMEM_LOG_HASH_KEY(i, key, pline->max_blocks);
+		n_try = pline->max_blocks;
+		PMEM_LOG_HASH_KEY(i, key, pline->max_blocks);
+
+		while (n_try > 0){
+			pmemobj_rwlock_wrlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
 			plog_block = D_RW(D_RW(pline->arr)[i]);
-			
 			if (plog_block->is_free){
-				/*we use the index suggested by hash value*/
-			}
-			else {
-				/*ask the bit_arr to get the first free plogblock*/
-				i_bit = pm_search_first_free_slot(pline, pline->bit_arr, pline->n_bit_blocks, BIT_BLOCK_SIZE);
-
-				if (i_bit >= 0){
-					i = i_bit;
-				}
-				else {
-					/*all log_block is not free, reallocate the array*/
-					i = 2 * pline->max_blocks; //invalid index
-				}
-			}
-
-			if (plog_block->is_free || 
-					(i_bit >= 0 && i < pline->max_blocks)){
-				//pmemobj_rwlock_wrlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
-				//pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
-				plog_block = D_RW(D_RW(pline->arr)[i]);
-				assert(plog_block->is_free);
-				
-				pm_bit_set(pline, pline->bit_arr, BIT_BLOCK_SIZE, i);
-
+				//found
 				plog_block->is_free = false;
 				plog_block->state = PMEM_IN_USED_BLOCK;
 				plog_block->key = key;
-				item->block_off = i;
-				//pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
-				//(2) Insert
-				HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, key, item);
-
-				//pmemobj_rwlock_unlock(pop, &pline->meta_lock);
-				return item;
-			}
-
-		} else {
-			/* (1) Method 2: search the free entry by hash the key then sequential search */
-			n_try = pline->max_blocks;
-			PMEM_LOG_HASH_KEY(i, key, pline->max_blocks);
-			while (n_try > 0){
-				pmemobj_rwlock_wrlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
-				plog_block = D_RW(D_RW(pline->arr)[i]);
-				if (plog_block->is_free){
-					//found
-					plog_block->is_free = false;
-					plog_block->state = PMEM_IN_USED_BLOCK;
-					plog_block->key = key;
-					item->block_off = i;
-					pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
-					//(2) Insert
-					HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, key, item);
-					return item;
-				}
 
 				pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
-				n_try--;
-				i = (i + 1) % pline->max_blocks;
+				//(2) Insert
+				pline->key_map->insert(std::make_pair(key, plog_block));
+				return plog_block;
 			}
-		} //end method 2
 
-		//If you reach here, then there is no free block, extend
+			pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+			n_try--;
+			i = (i + 1) % pline->max_blocks;
+		}
+
+		/*If you reach here, then there is no free block, extend */
 		__realloc_page_log_block_line(pop, ppl, pline, pline->max_blocks * 2);
 
 		goto retry;
-		
 	}
-	//item has already existed, do nothing
-	return item;
+}
+/*
+ * Add key to pline's hashtable if it hasn't exit yet
+ * The caller reponse for holding the pline->lock
+ * @param[in] pop
+ * @param[in] ppl
+ * @param[in] pline
+ * @param[in] key
+ * @return pointer to the item in hashtable
+ * old version used HASH_TABLE from InnoDB
+ * */
+plog_hash_t*
+pm_ppl_hash_check_and_add_old(
+		PMEMobjpool*				pop,
+		PMEM_PAGE_PART_LOG*			ppl,
+		PMEM_PAGE_LOG_HASHED_LINE*	pline,
+		uint64_t					key	)
+{
+	return NULL;
+//
+//	uint64_t i;
+//	int64_t n_try;
+//	int64_t i_bit;
+//
+//	PMEM_PAGE_LOG_BLOCK*	plog_block;
+//	plog_hash_t* item;
+//
+//	item = pm_ppl_hash_get_old(pop, ppl, pline, key);
+//	i_bit = -2; //init value 
+//
+//	if (item == NULL){
+//		/*key is not in hashtable.
+//		 * select a free plogbuf in page-partition for this key*/
+//		item = (plog_hash_t*) malloc(sizeof(plog_hash_t));
+//		item->key = key;
+//retry:
+//		if (USE_BIT_ARRAY) {
+//			/* (1) Method 1: search the free entry by hash the key then sequential search */
+//			PMEM_LOG_HASH_KEY(i, key, pline->max_blocks);
+//			plog_block = D_RW(D_RW(pline->arr)[i]);
+//			
+//			if (plog_block->is_free){
+//				/*we use the index suggested by hash value*/
+//			}
+//			else {
+//				/*ask the bit_arr to get the first free plogblock*/
+//				i_bit = pm_search_first_free_slot(pline, pline->bit_arr, pline->n_bit_blocks, BIT_BLOCK_SIZE);
+//
+//				if (i_bit >= 0){
+//					i = i_bit;
+//				}
+//				else {
+//					/*all log_block is not free, reallocate the array*/
+//					i = 2 * pline->max_blocks; //invalid index
+//				}
+//			}
+//
+//			if (plog_block->is_free || 
+//					(i_bit >= 0 && i < pline->max_blocks)){
+//				//pmemobj_rwlock_wrlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+//				//pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
+//				plog_block = D_RW(D_RW(pline->arr)[i]);
+//				assert(plog_block->is_free);
+//				
+//				pm_bit_set(pline, pline->bit_arr, BIT_BLOCK_SIZE, i);
+//
+//				plog_block->is_free = false;
+//				plog_block->state = PMEM_IN_USED_BLOCK;
+//				plog_block->key = key;
+//				item->block_off = i;
+//				//pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+//				//(2) Insert key map
+//				HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, key, item);
+//				pline->key_map->insert(std::make_pair(key, plog_block));
+//
+//				//pmemobj_rwlock_unlock(pop, &pline->meta_lock);
+//				return item;
+//			}
+//
+//		} else {
+//			/* (1) Method 2: search the free entry by hash the key then sequential search */
+//			n_try = pline->max_blocks;
+//			PMEM_LOG_HASH_KEY(i, key, pline->max_blocks);
+//
+//			while (n_try > 0){
+//				pmemobj_rwlock_wrlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+//				plog_block = D_RW(D_RW(pline->arr)[i]);
+//				if (plog_block->is_free){
+//					//found
+//					plog_block->is_free = false;
+//					plog_block->state = PMEM_IN_USED_BLOCK;
+//					plog_block->key = key;
+//					item->block_off = i;
+//					pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+//					//(2) Insert
+//					HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, key, item);
+//					pline->key_map->insert(std::make_pair(key, plog_block));
+//					return item;
+//				}
+//
+//				pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
+//				n_try--;
+//				i = (i + 1) % pline->max_blocks;
+//			}
+//		} //end method 2
+//
+//		//If you reach here, then there is no free block, extend
+//		__realloc_page_log_block_line(pop, ppl, pline, pline->max_blocks * 2);
+//
+//		goto retry;
+//		
+//	}
+//	//item has already existed, do nothing
+//	return item;
 }
 
-plog_hash_t*
+PMEM_PAGE_LOG_BLOCK*
 pm_ppl_hash_get(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*		ppl,
 		PMEM_PAGE_LOG_HASHED_LINE* pline,
 		uint64_t			key	)
 {
-	plog_hash_t* item;
-	ulint hashed;
+	auto it = pline->key_map->find(key);
 
-	hashed = hash_calc_hash(key, pline->addr_hash);
-
-	for (item = static_cast<plog_hash_t*> (
-				HASH_GET_FIRST(pline->addr_hash, hashed));
-		item != 0;
-		item = static_cast<plog_hash_t*> (
-				HASH_GET_NEXT(addr_hash, item))) {
-		if (item->key == key){
-			return item;
-		}
+	if (it != pline->key_map->end()){
+		return (it->second);
+	} else{
+		return (NULL);
 	}
+
+}
+
+plog_hash_t*
+pm_ppl_hash_get_old(
+		PMEMobjpool*		pop,
+		PMEM_PAGE_PART_LOG*		ppl,
+		PMEM_PAGE_LOG_HASHED_LINE* pline,
+		uint64_t			key	)
+{
+//	plog_hash_t* item;
+//	ulint hashed;
+//
+//	hashed = hash_calc_hash(key, pline->addr_hash);
+//
+//	for (item = static_cast<plog_hash_t*> (
+//				HASH_GET_FIRST(pline->addr_hash, hashed));
+//		item != 0;
+//		item = static_cast<plog_hash_t*> (
+//				HASH_GET_NEXT(addr_hash, item))) {
+//		if (item->key == key){
+//			return item;
+//		}
+//	}
 
 	return (NULL);
 }
@@ -1350,13 +1436,28 @@ pm_ppl_hash_remove(
 		uint64_t			key
 		) 
 {
-	plog_hash_t* item;
+	auto it = pline->key_map->find(key);
 
-	item = pm_ppl_hash_get(pop, ppl, pline, key);
-
-	if (item != NULL){
-		HASH_DELETE(plog_hash_t, addr_hash, pline->addr_hash, key, item);
+	if (it != pline->key_map->end()){
+		pline->key_map->erase(it);
 	}
+}
+
+void
+pm_ppl_hash_remove_old(
+		PMEMobjpool*		pop,
+		PMEM_PAGE_PART_LOG*		ppl,
+		PMEM_PAGE_LOG_HASHED_LINE* pline,
+		uint64_t			key
+		) 
+{
+	//plog_hash_t* item;
+
+	//item = pm_ppl_hash_get_old(pop, ppl, pline, key);
+
+	//if (item != NULL){
+	//	HASH_DELETE(plog_hash_t, addr_hash, pline->addr_hash, key, item);
+	//}
 }
 ///////////////END HASH TABLE ///////////////////
 
@@ -1593,7 +1694,7 @@ pm_ppl_write_rec(
 	PMEM_PAGE_LOG_BUF*			plogbuf;
 
 	PMEM_PAGE_LOG_BLOCK*		plog_block;
-	plog_hash_t*				item;
+	//plog_hash_t*				item;
 
 	ulint hashed;
 	byte* log_des;
@@ -1616,7 +1717,6 @@ pm_ppl_write_rec(
 #if defined (UNIV_PMEM_SIM_LATENCY)
 	uint64_t start_cycle, end_cycle;
 #endif
-
 
 	assert(rec_size > 0);
 	if ( (*log_src) == MLOG_TABLE_DYNAMIC_META) {
@@ -1647,6 +1747,7 @@ pm_ppl_write_rec(
 
 	assert(hashed < n);
 
+	//printf("BEGIN write rec on pline %zu key %zu\n", hashed, key);
 retry:
 	pline = D_RW(D_RW(ppl->buckets)[hashed]);
 	TOID_ASSIGN(logbuf, (pline->logbuf).oid);
@@ -1671,6 +1772,7 @@ retry:
 	{
 		pmemobj_rwlock_unlock(pop, &pline->lock);
 		
+		//printf("WAIT_FOR_FLUSH write rec on pline %zu key %zu\n", hashed, key);
 		/*wait for a logbuf available*/
 		os_event_wait(pline->log_flush_event);
 		/*wake up, the plogbuf may changed, better to re-acquire it*/
@@ -1684,6 +1786,7 @@ retry:
 		pline->is_flushing = true;
 		os_event_reset(pline->log_flush_event);
 
+		//printf("LOG BUF IS FULL write rec on pline %zu key %zu\n", hashed, key);
 get_free_buf:
 		// (1.1) Get a free log buf
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
@@ -1697,6 +1800,7 @@ get_free_buf:
 		if (pfreepool->cur_free_bufs == 0 || 
 				TOID_IS_NULL(free_buf)){
 			//no empty free logbuf, wait for an available one
+			//printf("WAIT_FOR_FREE_POOL write rec on pline %zu key %zu\n", hashed, key);
 			pmemobj_rwlock_unlock(pop, &pfreepool->lock);
 			os_event_wait(ppl->free_log_pool_event);
 			goto get_free_buf;
@@ -1785,14 +1889,15 @@ get_free_buf:
 
 		/*(2) Get the plogblock*/	
 		pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
-		item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
+		//item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
+		plog_block = pm_ppl_hash_check_and_add(pop, ppl, pline, key);	
 		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 
-		assert(item->block_off < pline->max_blocks);
+		//assert(item->block_off < pline->max_blocks);
 
 		/*acquire lock on plogblock is not necessary
 		 * plog_block->is_free is false after pm_ppl_hash_check_and_add()*/
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
+		//plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
 		assert(plog_block);
 
 		// (1.3) update plog_block
@@ -1818,7 +1923,8 @@ get_free_buf:
 #endif
 			//update the oldest
 			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
+				//pline->oldest_block_off = item->block_off;
+				pline->oldest_block_off = plog_block->id;
 #if defined (UNIV_PMEMOBJ_PERSIST)
 				pmemobj_persist(pop, &pline->oldest_block_off, sizeof(pline->oldest_block_off));
 #endif
@@ -1830,7 +1936,8 @@ get_free_buf:
 			//test
 			/*insert the pair (offset, bid) into the set*/
 			write_off = plog_block->start_diskaddr + plog_block->start_off;
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
+			//pline->offset_map->insert( std::make_pair(write_off, item->block_off));
+			pline->offset_map->insert( std::make_pair(write_off, plog_block));
 
 		}
 		plog_block->lastLSN = rec_lsn;
@@ -1850,6 +1957,7 @@ get_free_buf:
 		pmemobj_rwlock_unlock(pop, &pline->lock);
 		/* end critical section */
 		//pmemobj_rwlock_unlock(pop, &pline->lock);
+		//printf("END (full) write rec on pline %zu key %zu\n", hashed, key);
 		return rec_lsn;
 	}//end handle full logbuf
 	else {
@@ -1887,14 +1995,15 @@ get_free_buf:
 		/*(2) Get the plogblock*/	
 		//test unblock
 		pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
-		item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
+		//item = pm_ppl_hash_check_and_add(pop, ppl, pline, key); 
+		plog_block = pm_ppl_hash_check_and_add(pop, ppl, pline, key);
 		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 
-		assert(item->block_off < pline->max_blocks);
+		//assert(item->block_off < pline->max_blocks);
 
 		/*acquire lock on plogblock is not necessary
 		 * plog_block->is_free is false after pm_ppl_hash_check_and_add()*/
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
+		//plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
 		assert(plog_block);
 
 		//pmemobj_rwlock_wrlock(pop, &plog_block->lock);
@@ -1922,7 +2031,8 @@ get_free_buf:
 #endif
 			//update the oldest
 			if (pline->oldest_block_off == UINT32_MAX) {
-				pline->oldest_block_off = item->block_off;
+				//pline->oldest_block_off = item->block_off;
+				pline->oldest_block_off = plog_block->id;
 #if defined (UNIV_PMEMOBJ_PERSIST)
 				pmemobj_persist(pop, &pline->oldest_block_off, sizeof(pline->oldest_block_off));
 #endif
@@ -1935,7 +2045,8 @@ get_free_buf:
 			write_off = plog_block->start_diskaddr + plog_block->start_off;
 
 			pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
-			pline->offset_map->insert( std::make_pair(write_off, item->block_off));
+			//pline->offset_map->insert( std::make_pair(write_off, item->block_off));
+			pline->offset_map->insert( std::make_pair(write_off, plog_block));
 			pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 		}
 
@@ -1946,6 +2057,7 @@ get_free_buf:
 
 		//pmemobj_rwlock_unlock(pop, &plog_block->lock);
 		//pmemobj_rwlock_unlock(pop, &pline->lock);
+		//printf("END write rec on pline %zu key %zu\n", hashed, key);
 		return rec_lsn;
 	} //end handle regular logbuf
 	//pmemobj_rwlock_unlock(pop, &pline->lock);
@@ -3383,9 +3495,13 @@ pm_ppl_set_flush_state(
 	pline = D_RW(D_RW(ppl->buckets)[hashed]);
 	assert(pline);
 
-	item = pm_ppl_hash_get(pop, ppl, pline, key);
-	if (item != NULL){
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
+	//item = pm_ppl_hash_get(pop, ppl, pline, key);
+	plog_block = pm_ppl_hash_get(pop, ppl, pline, key);
+
+	//if (item != NULL)
+	if (plog_block != NULL)
+	{
+		//plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
 		assert(plog_block->key == key);
 		assert(plog_block->state = PMEM_IN_USED_BLOCK);
 
@@ -3419,9 +3535,11 @@ pm_ppl_flush_page(
 	uint32_t n;
 	
 	uint64_t write_off;
+	uint64_t block_id;
+
 	uint64_t min_off;
 
-	plog_hash_t* item;
+	//plog_hash_t* item;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE* pline;
@@ -3441,28 +3559,23 @@ pm_ppl_flush_page(
 	assert(pline);
 
 	//new implement using hashtable
-	item = pm_ppl_hash_get(pop, ppl, pline, key);
-	if (item != NULL){
-		assert(item->block_off < pline->max_blocks);
+	//item = pm_ppl_hash_get(pop, ppl, pline, key);
+	//plog_block = pm_ppl_hash_get(pop, ppl, pline, key);
+	
+	auto key_it = pline->key_map->find(key);
 
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-		assert(plog_block->key == key);
-		//if (plog_block->state != PMEM_IN_FLUSH_BLOCK){
-		//	printf("===> WARN in pm_ppl_flush_page() plog_block->state is %zu\n", plog_block->state);
-		//}
-		//assert(plog_block->state == PMEM_IN_FLUSH_BLOCK);	
-		//pmemobj_rwlock_wrlock(pop, &pline->lock);
+	if (key_it != pline->key_map->end()){
+		plog_block = key_it->second;
+
 		pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
 		pmemobj_rwlock_wrlock(pop, &plog_block->lock);
 
 		/*save the write_off before reseting*/	
+		block_id = plog_block->id;
 		write_off = plog_block->start_diskaddr + plog_block->start_off;
 
-		if (USE_BIT_ARRAY) {
-			pm_bit_clear(pline, pline->bit_arr, sizeof(long long), plog_block->id);
-		}
-
 		__reset_page_log_block(plog_block);
+
 #if defined (UNIV_PMEMOBJ_PERSIST)
 		pmemobj_persist(pop, plog_block, sizeof(PMEM_PAGE_LOG_BLOCK));
 #endif
@@ -3471,16 +3584,15 @@ pm_ppl_flush_page(
 		/*the reset function takes 12 accesses*/
 		PMEM_DELAY(start_cycle, end_cycle, 12 * pmw->PMEM_SIM_CPU_CYCLES); 
 #endif
-
 		pmemobj_rwlock_unlock(pop, &plog_block->lock);
 
-		/*remove item from map*/	
+		/*remove corresponding keys from key_map*/
+		pline->key_map->erase(key_it);
 
-		std::map<uint64_t, uint32_t>::iterator it;
-		it = pline->offset_map->find(write_off);
-
-		if (it != pline->offset_map->end()){
-			pline->offset_map->erase(it);
+		/*remove corresponding offset from offset_map*/
+		auto offset_it = pline->offset_map->find(write_off);
+		if (offset_it != pline->offset_map->end()){
+			pline->offset_map->erase(offset_it);
 		}
 		else {
 			/*write_off is not found, logical error*/
@@ -3488,23 +3600,19 @@ pm_ppl_flush_page(
 			assert(0);
 		}
 
-		/*if the removed block is the oldest, update the new one	*/
-		if (item->block_off == pline->oldest_block_off){
-			/*Method 1: scan in the array (slow)*/
-			//pm_ppl_update_oldest(pop, ppl, pline);
+		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
 
-			/*Method 2: use std::map */
-			min_off = ULONG_MAX;
+		if (block_id == pline->oldest_block_off)
+		{
 
 			if (pline->offset_map->size() > 0){
-				/* get the next min offset*/
-				it = pline->offset_map->begin();
+				/*need to update*/
+				auto it = pline->offset_map->begin();
 
-				min_off = it->second;
-				PMEM_PAGE_LOG_BLOCK* pmin_log_block;
-				pmin_log_block = D_RW(D_RW(pline->arr)[min_off]);
-				/*the second smallest must larger than the smallest*/
-				if (pmin_log_block->start_diskaddr + pmin_log_block->start_off <= write_off){
+				PMEM_PAGE_LOG_BLOCK* pmin_log_block = it->second;
+				min_off = pmin_log_block->start_diskaddr + pmin_log_block->start_off;
+
+				if (min_off <= write_off){
 					printf("===> PMEM_ERROR in pm_ppl_flush_page, second smallest (%zu + %zu = %zu) must larger than the smallest write_off %zu",
 							pmin_log_block->start_diskaddr,
 							pmin_log_block->start_off,
@@ -3513,28 +3621,26 @@ pm_ppl_flush_page(
 					assert(pmin_log_block->start_diskaddr + pmin_log_block->start_off > write_off);
 				}
 
+				/*consider whether reset the checkpoint flag*/
 				if (pline->is_req_checkpoint){
 					/*The checkpoint request condition*/
 					if (pmin_log_block->firstLSN > pline->ckpt_lsn){
 						pline->is_req_checkpoint = false;
 					}
 				}
-			} else {
+			}
+			else {
+				pline->oldest_block_off = ULONG_MAX;	
 				pline->is_req_checkpoint = false;
 			}
+		}
 
-			pline->oldest_block_off = min_off;	
-#if defined (UNIV_PMEM_SIM_LATENCY)
-			PMEM_DELAY(start_cycle, end_cycle, 11 * pmw->PMEM_SIM_CPU_CYCLES); 
-#endif
-
-		}//end if (item->block_off == ...)
-		//pmemobj_rwlock_wrlock(pop, &pline->meta_lock);
-		HASH_DELETE(plog_hash_t, addr_hash, pline->addr_hash, key, item);
-		pmemobj_rwlock_unlock(pop, &pline->meta_lock);
-		//pmemobj_rwlock_unlock(pop, &pline->lock);
-	}	
-	
+	} //end if 
+	else {
+		/* the dirty page hasn't exitst in hashmap 
+		 * do nothing
+		 * */
+	}
 	return;
 }
 

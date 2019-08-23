@@ -4557,8 +4557,8 @@ pm_ppl_analysis(
 	total_delta = 0;
 	*global_max_lsn = 0;
 	
-	pm_page_part_log_hash_free(pop, ppl);
-	pm_page_part_log_hash_create(pop, ppl);
+	//pm_page_part_log_hash_free(pop, ppl);
+	//pm_page_part_log_hash_create(pop, ppl);
 
     //find low_watermark for each line
 	for (i = 0; i < n; i++) {
@@ -4596,11 +4596,20 @@ pm_ppl_analysis(
 				min_write_off = plog_block->start_diskaddr + plog_block->start_off;
 
 				/*add block->key into the per-line hashtable */
-				pm_ppl_hash_add(pline, plog_block, j);
+				//pm_ppl_hash_add(pline, plog_block, j);
+				pline->key_map->insert(std::make_pair(plog_block->key, plog_block));
+
 
 				/*add min_write_off into the per-line sorted map*/
-				pline->offset_map->insert(
-						std::make_pair(min_write_off, j));
+				//pline->offset_map->insert(std::make_pair(min_write_off, j));
+				pline->offset_map->insert(std::make_pair(min_write_off, plog_block));
+
+				//debug, find what has just inserted
+				//std::map<uint64_t, uint32_t>::iterator it;
+				auto it = pline->offset_map->find(min_write_off);
+				if (it != pline->offset_map->end()){
+					assert(it->first == min_write_off);
+				}	
 
 				if(low_watermark > min_write_off) 
 				{
@@ -5322,13 +5331,16 @@ pm_ppl_recv_parse_log_rec(
 	PMEM_FOLD(key, *space, *page_no);
 
 	/*Get the log_block by hashtable. This hashtable is built during analysis phase*/
-	item = pm_ppl_hash_get(pop, ppl, pline, key);
+	//item = pm_ppl_hash_get(pop, ppl, pline, key);
 
-	if (item == NULL) {
-		plog_block = NULL;
-	} else {
-		plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
-	}
+	//if (item == NULL) {
+	//	plog_block = NULL;
+	//} else {
+	//	plog_block = D_RW(D_RW(pline->arr)[item->block_off]);
+	//}
+	
+	plog_block = pm_ppl_hash_get(pop, ppl, pline, key);
+
 	//We don't use this function because it has high overhead O(k)
 	//plog_block = pm_ppl_get_log_block_by_key(pop, ppl, key);
 	if (plog_block == NULL){

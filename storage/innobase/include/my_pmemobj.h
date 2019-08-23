@@ -577,6 +577,7 @@ struct __pmem_space_t {
 	uint32_t space_no;
 };
 
+/*Hash item of the hashtable of pairs (uint64_t key, plog_hash_t item) */
 struct plog_hash_t {
 	uint64_t	key;
 	uint32_t	block_off; /*block offset in the line*/
@@ -586,6 +587,15 @@ struct plog_hash_t {
 /*
  * A hashed line has array of log blocks share the same hashed value and log buffer
  * */
+
+using OFFSET_MAP = 
+std::map<uint64_t, PMEM_PAGE_LOG_BLOCK*, std::less<uint64_t>,
+	ut_allocator<std::pair<uint64_t, PMEM_PAGE_LOG_BLOCK*>>>;	
+
+using KEY_MAP = 
+std::unordered_map<uint64_t, PMEM_PAGE_LOG_BLOCK*, std::hash<uint64_t>, std::equal_to<uint64_t>,
+	ut_allocator<std::pair<uint64_t, PMEM_PAGE_LOG_BLOCK*>>>;
+
 struct __pmem_page_log_hashed_line {
 	/*general lock protect data in PART 1 and PART 3*/
 	PMEMrwlock		lock;
@@ -620,10 +630,12 @@ struct __pmem_page_log_hashed_line {
 	long long* bit_arr; //bit array to manage free slots
 	uint16_t n_bit_blocks; //number of block in bit_arr
 
-	/*Hash table*/
-	hash_table_t* addr_hash; //hash the log block in this line
+	/*Hash tables*/
+	//hash_table_t* addr_hash; //hash the log block in this line
+	KEY_MAP* key_map; //hash the log block in this line
 	
-	std::map<uint64_t, uint32_t>* offset_map;
+
+	OFFSET_MAP* offset_map;
 
 	/*PART 3: recovery*/
 	//Alternative to recv_sys_t in InnoDB, allocate in DRAM when recovery
@@ -1189,8 +1201,16 @@ pm_page_part_log_hash_free(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*		ppl);
 
-plog_hash_t*
+//plog_hash_t*
+PMEM_PAGE_LOG_BLOCK*
 pm_ppl_hash_get(
+		PMEMobjpool*		pop,
+		PMEM_PAGE_PART_LOG*		ppl,
+		PMEM_PAGE_LOG_HASHED_LINE* pline,
+		uint64_t			key	);
+
+plog_hash_t*
+pm_ppl_hash_get_old(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*		ppl,
 		PMEM_PAGE_LOG_HASHED_LINE* pline,
@@ -1211,24 +1231,24 @@ void pm_ppl_log_start(
  * @param[in] idx index of the block on the line
  * @return: the hash item added
  * */
-static inline void
-pm_ppl_hash_add(
-		PMEM_PAGE_LOG_HASHED_LINE* pline,
-		PMEM_PAGE_LOG_BLOCK*	plog_block,
-		uint32_t				idx
-		)
-{
+//static inline void
+//pm_ppl_hash_add(
+//		PMEM_PAGE_LOG_HASHED_LINE* pline,
+//		PMEM_PAGE_LOG_BLOCK*	plog_block,
+//		uint32_t				idx
+//		)
+//{
+//
+//	plog_hash_t* item;
+//
+//	item = (plog_hash_t*) malloc(sizeof(plog_hash_t));
+//	item->key = plog_block->key;
+//	item->block_off = idx;
+//	HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, plog_block->key, item);
+//	
+//}
 
-	plog_hash_t* item;
-
-	item = (plog_hash_t*) malloc(sizeof(plog_hash_t));
-	item->key = plog_block->key;
-	item->block_off = idx;
-	HASH_INSERT(plog_hash_t, addr_hash, pline->addr_hash, plog_block->key, item);
-	
-}
-
-plog_hash_t*
+PMEM_PAGE_LOG_BLOCK*
 pm_ppl_hash_check_and_add(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*		ppl,
