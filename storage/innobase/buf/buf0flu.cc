@@ -889,6 +889,17 @@ void buf_flush_write_complete(buf_page_t *bpage) {
   ut_ad(bpage != NULL);
   ut_ad(mutex_own(buf_page_get_mutex(bpage)));
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	//we only call pm_ppl_flush_page when the flushed page is persist on storage
+	pm_ppl_flush_page(
+			gb_pmw->pop, gb_pmw, gb_pmw->ppl,
+			bpage,
+			bpage->id.space(),
+			bpage->id.page_no(),
+			bpage->id.fold(),
+			bpage->newest_modification);
+
+#endif //UNIV_PMEMBOJ_PART_PL
   const buf_flush_t flush_type = buf_page_get_flush_type(bpage);
   buf_pool_t *buf_pool = buf_pool_from_bpage(bpage);
 
@@ -910,17 +921,6 @@ void buf_flush_write_complete(buf_page_t *bpage) {
   mutex_exit(&buf_pool->flush_state_mutex);
 
   buf_dblwr_update(bpage, flush_type);
-#if defined (UNIV_PMEMOBJ_PART_PL)
-	//we only call pm_ppl_flush_page when the flushed page is persist on storage
-	pm_ppl_flush_page(
-			gb_pmw->pop, gb_pmw, gb_pmw->ppl,
-			bpage,
-			bpage->id.space(),
-			bpage->id.page_no(),
-			bpage->id.fold(),
-			bpage->newest_modification);
-
-#endif //UNIV_PMEMBOJ_PART_PL
 }
 #endif /* !UNIV_HOTBACKUP */
 
@@ -3820,8 +3820,11 @@ void pm_log_flusher_worker() {
 				plogbuf = flusher->flush_list_arr[i];
 				if (plogbuf != NULL)
 				{
-					//***this call aio_batch ***
+					/***this call aio_batch
+						pm_log_flush_log_buf() --> pm_log_fil_io() --> 
+					*/
 					pm_log_flush_log_buf(gb_pmw->pop, gb_pmw->ppl, plogbuf);
+
 					flusher->n_requested--;
 					os_event_set(flusher->is_log_req_full);
 					//we can set the pointer to null after the pm_buf_flush_list finished

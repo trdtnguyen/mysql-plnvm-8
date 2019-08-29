@@ -4596,15 +4596,11 @@ pm_ppl_analysis(
 				min_write_off = plog_block->start_diskaddr + plog_block->start_off;
 
 				/*add block->key into the per-line hashtable */
-				//pm_ppl_hash_add(pline, plog_block, j);
 				pline->key_map->insert(std::make_pair(plog_block->key, plog_block));
 
-
 				/*add min_write_off into the per-line sorted map*/
-				//pline->offset_map->insert(std::make_pair(min_write_off, j));
 				pline->offset_map->insert(std::make_pair(min_write_off, plog_block));
 
-				//debug, find what has just inserted
 				//std::map<uint64_t, uint32_t>::iterator it;
 				auto it = pline->offset_map->find(min_write_off);
 				if (it != pline->offset_map->end()){
@@ -4684,9 +4680,11 @@ pm_ppl_redo(
 		PMEM_PAGE_PART_LOG*	ppl) {
 
 	uint32_t n, i;
-	//bool is_multi_redo = false;
-	bool is_multi_redo = true;
-	//ulint t1, t2;
+
+	/*disable is_multi_redo for debugging*/
+
+	bool is_multi_redo = false;
+	//bool is_multi_redo = true;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE*		pline;
@@ -4694,7 +4692,8 @@ pm_ppl_redo(
     PMEM_LOG_REDOER*				redoer;
 
 	n = ppl->n_buckets;
-	// (0) REDO line by line, only used for debugging
+
+	/* (0) REDO line by line, only used for debugging */
 	if (!is_multi_redo){	
 		for (i = 0; i < n; i++) {
 			pline = D_RW(D_RW(ppl->buckets)[i]);
@@ -4712,9 +4711,9 @@ pm_ppl_redo(
 		return;
 	}
 
-	//Parallelism REDO
-	//t1 = ut_time_us(NULL);
-    /*(1) Init the redoers */
+	/* Parallelism REDO */
+    
+	/*(1) Init the redoers */
     redoer = pm_log_redoer_init(n);
     ppl->redoer = redoer;
 	
@@ -4760,39 +4759,20 @@ pm_ppl_redo(
         redoer->hashed_line_arr[i] = pline;
     }
 
-    /*trigger REDOer workers
-	 * workers will call pm_ppl_redo_line()
-	 * */
+    /*trigger REDOer workers */
     os_event_set(redoer->is_log_req_not_empty);
+
+	/*Now redoers will wakeup and call pm_ppl_redo_line() */
     
     /*(4) wait for all threads finish */
     while (redoer->n_remains > 0){
         os_event_wait(redoer->is_log_all_finished);
-		//if (redoer->n_remains > 0){
-		//	printf("PMEM_REDO1, redoer->n_remains = %zu > 0\n", redoer->n_remains);
-		//}
     }
 
 //finish: 
     //(4) finish
     pm_log_redoer_close(ppl->redoer);
     printf("\nPMEM_RECV: ===== REDO1 completed ======\n");
-	//t2 = ut_time_us(NULL);
-
-	//for stat
-	//printf("REDO PHASE1 time %f seconds\n", (t2 - t1)*1.0/1000000);
-	//for (i = 0; i < n; i++) {
-	//	pline = D_RW(D_RW(ppl->buckets)[i]);
-	//	recv_line = pline->recv_line;
-
-	//	printf("(pline thread_id start_time end_time elapse_time %zu %zu %f %f %f\n",
-	//		   	pline->hashed_id,
-	//		   	recv_line->redo1_thread_id,
-	//		   	(recv_line->redo1_start_time * 1.0 / 1000000),
-	//		   	(recv_line->redo1_end_time * 1.0 / 1000000),
-	//		   	((recv_line->redo1_end_time - recv_line->redo1_start_time) * 1.0 / 1000000)
-	//			);
-	//}
 }
 
 /*
@@ -4822,9 +4802,11 @@ pm_ppl_redo_line(
     
     //for phase 2
     byte* ptr;
-
+	
+	/*read from header*/
     uint32_t actual_len;
     uint32_t n_recs;
+	uint32_t w_hashed_id; // hash_id assigned during writing log, located in log block's header
 
 	int64_t parsed_recs;
 	uint64_t need_recs;
@@ -4839,6 +4821,7 @@ pm_ppl_redo_line(
 	uint64_t total_skip1_recs;
 	uint64_t total_skip2_recs;
 #endif
+
     dberr_t err;
 	
 	PMEM_RECV_LINE* recv_line = pline->recv_line;
@@ -4911,9 +4894,14 @@ read_log_file:
         /* read the actual buffer len (included the header) */
         actual_len = mach_read_from_4(recv_buf);
 		n_recs = mach_read_from_4(recv_buf + 4);
+		w_hashed_id = mach_read_from_4(recv_buf + 8);
 
-        assert(actual_len > 0);
-        assert(n_recs > 0);
+
+		if (actual_len == 0){
+			/*I/O error*/
+			assert(actual_len > 0);
+			assert(n_recs > 0);
+		}
 
         ptr = recv_buf + PMEM_LOG_BUF_HEADER_SIZE;
 
@@ -4963,6 +4951,7 @@ read_log_nvm:
 
         actual_len = mach_read_from_4(recv_buf);
 		n_recs = mach_read_from_4(recv_buf + 4);
+		w_hashed_id = mach_read_from_4(recv_buf + 8);
 
         assert(actual_len > 0);
         assert(actual_len == pcur_logbuf->cur_off);
@@ -5366,7 +5355,8 @@ pm_ppl_recv_parse_log_rec(
 	}
 
 	/* We strictly check the first log rec here.
-	 * The plog_block->first_rec_found is set false at init and only set true here, when the first log rec info in plogblock is match with the info in the log rec.
+	 * The plog_block->first_rec_found is set false at init and only set true here,
+	 * when the first log rec info in plogblock is match with the info in the log rec.
 	 * */
 	if (!plog_block->first_rec_found) {
 		assert(plog_block->first_rec_size == rec_len);
@@ -5374,6 +5364,8 @@ pm_ppl_recv_parse_log_rec(
 		
 		/*There is a case one page is flush then read again many times, the info in the plog_block is the last read*/
 		/*if plog_block->firstLSN < *rec_lsn, we miss some log recs of this plog_block*/
+		/*if plog_block->firstLSN > *rec_lsn, then the corresponding page is modified-flush-read-modified skip log records up to the plogblock->firstLSN*/
+
 		assert(plog_block->firstLSN == *rec_lsn);
 		assert(plog_block->start_diskaddr == recv_line->recovered_addr);
 		assert(plog_block->start_off == (recv_line->recovered_offset + PMEM_LOG_BUF_HEADER_SIZE));

@@ -1671,9 +1671,15 @@ static dberr_t os_file_io_complete(const IORequest &type, os_file_t fh,
 
   if (!type.is_compression_enabled()) {
     if (type.is_log() && offset >= LOG_FILE_HDR_SIZE) {
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	/* PL-NVM doesn't encrypt log page during writing logs.
+	 * Thus, it doesn't decrypt log page during reading logs*/
+	  return (ret);
+#else //original
       Encryption encryption(type.encryption_algorithm());
 
       ret = encryption.decrypt_log(type, buf, src_len, scratch, len);
+#endif //UNIV_PMEMOBJ_PART_PL
     }
 
     return (ret);

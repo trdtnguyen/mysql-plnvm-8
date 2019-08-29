@@ -1000,6 +1000,14 @@ class Fil_shard {
                           page_no_t max_pages = PAGE_NO_MAX)
       MY_ATTRIBUTE((warn_unused_result));
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  fil_node_t *pm_ppl_create_node(const char *name, page_no_t size, fil_space_t *space,
+                          bool is_raw, bool punch_hole, bool atomic_write,
+                          page_no_t max_pages = PAGE_NO_MAX)
+      MY_ATTRIBUTE((warn_unused_result));
+#endif //UNIV_PMEMOBJ_PART_PL
+
+
 #ifdef UNIV_DEBUG
   /** Validate a shard. */
   void validate() const;
@@ -2192,6 +2200,99 @@ fil_node_t *Fil_shard::create_node(const char *name, page_no_t size,
 
   return (&space->files.front());
 }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+/*
+ * Simulate Fil_shard::create_node()
+ * Called by pm_log_fil_node_create()
+ * */
+fil_node_t *Fil_shard::pm_ppl_create_node(const char *name, page_no_t size,
+                                   fil_space_t *space, bool is_raw,
+                                   bool punch_hole, bool atomic_write,
+                                   page_no_t max_pages) {
+  ut_ad(name != nullptr);
+  ut_ad(fil_system != nullptr);
+
+  if (space == nullptr) {
+    return (nullptr);
+  }
+
+  fil_node_t file;
+
+  memset(&file, 0x0, sizeof(file));
+
+  file.name = mem_strdup(name);
+
+  ut_a(!is_raw || srv_start_raw_disk_in_use);
+
+  file.sync_event = os_event_create("fsync_event");
+
+  file.is_raw_disk = is_raw;
+
+  file.size = size;
+
+  file.flush_size = size;
+
+  file.magic_n = FIL_NODE_MAGIC_N;
+
+  file.init_size = size;
+
+  file.max_size = max_pages;
+
+  file.space = space;
+
+  os_file_stat_t stat_info;
+
+#ifdef UNIV_DEBUG
+  dberr_t err =
+#endif /* UNIV_DEBUG */
+
+      os_file_get_status(
+          file.name, &stat_info, false,
+          fsp_is_system_temporary(space->id) ? true : srv_read_only_mode);
+
+  ut_ad(err == DB_SUCCESS);
+
+  file.block_size = stat_info.block_size;
+
+  /* In this debugging mode, we can overcome the limitation of some
+  OSes like Windows that support Punch Hole but have a hole size
+  effectively too large.  By setting the block size to be half the
+  page size, we can bypass one of the checks that would normally
+  turn Page Compression off.  This execution mode allows compression
+  to be tested even when full punch hole support is not available. */
+  DBUG_EXECUTE_IF(
+      "ignore_punch_hole",
+      file.block_size = ut_min(static_cast<ulint>(stat_info.block_size),
+                               UNIV_PAGE_SIZE / 2););
+
+  if (!IORequest::is_punch_hole_supported() || !punch_hole ||
+      file.block_size >= srv_page_size) {
+    fil_no_punch_hole(&file);
+  } else {
+    file.punch_hole = punch_hole;
+  }
+
+  file.atomic_write = atomic_write;
+
+  mutex_acquire();
+
+  space->size += size;
+
+  space->files.push_back(file);
+
+  mutex_release();
+
+  ut_a(space->id == TRX_SYS_SPACE ||
+       space->id == dict_sys_t::s_log_space_first_id ||
+       space->id == PMEM_LOG_SPACE_FIRST_ID ||
+       space->purpose == FIL_TYPE_TEMPORARY || space->files.size() == 1);
+
+  /*DO NOT return space->files.front() as the original*/	
+  //return (&space->files.front());
+  return (&space->files.back());
+}
+#endif //UNIV_PMEMOBJ_PART_PL
 
 /** Attach a file to a tablespace. File must be closed.
 @param[in]	name		file name (file must be closed)
@@ -10801,8 +10902,10 @@ pm_log_fil_node_create(
 {
 	fil_node_t* node;
 	auto shard = fil_system->shard_by_id(space->id);
+	/*We don't reply on Fil_shard::create_node() from InnoDB because it push_back() and return space->files.front()
+	 * Instead, we simulate that function */
 	
-	node = shard->create_node(name, size, space, is_raw,
+	node = shard->pm_ppl_create_node(name, size, space, is_raw,
                             IORequest::is_punch_hole_supported(), atomic_write,
                             max_pages);
 
@@ -10817,6 +10920,9 @@ pm_log_fil_node_create(
 }
 /*
  * Write log buffer to disk use Linux AIO
+ * Caller: log flusher threads
+ * When a per-line log buffer is full, the query thread assign that 
+ * full logbuf to a flusher thread
  * */
 void
 pm_log_fil_io(
@@ -10915,6 +11021,8 @@ pm_log_fil_io(
 
 	}
 	// Call Async IO	
+	
+	//printf("DEBUG pm_log_fil_io() write log file %s offset %zu len %zu\n", node->name, next_offset, len);
 	err = os_aio(
 		req_type,
 		mode, node->name, node->handle,

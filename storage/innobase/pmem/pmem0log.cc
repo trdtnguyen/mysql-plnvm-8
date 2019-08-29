@@ -1254,8 +1254,11 @@ retry:
 				plog_block->state = PMEM_IN_USED_BLOCK;
 				plog_block->key = key;
 
+				assert(plog_block->firstLSN == 0);
+
 				pmemobj_rwlock_unlock(pop, &D_RW(D_RW(pline->arr)[i])->lock);
 				//(2) Insert
+				//printf("DEBUG key_map insert key %zu on plog_block id %zu hashed %zu\n", key, plog_block->id, pline->hashed_id);
 				pline->key_map->insert(std::make_pair(key, plog_block));
 				return plog_block;
 			}
@@ -1708,6 +1711,8 @@ pm_ppl_write_rec(
 	uint64_t rec_lsn;
 	uint64_t write_off;
 	uint64_t old_off;
+
+	bool is_dict = false;
 	
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
 	uint64_t start_time, end_time;
@@ -1723,6 +1728,8 @@ pm_ppl_write_rec(
 		/*New in MySQL 8.0
 		 * The last two param is table_id and version
 		 * */
+		is_dict = true;
+
 		table_id_t table_id;
 		uint64 version; //note that uint64 is long long unsigned int
 
@@ -1788,13 +1795,13 @@ retry:
 
 		//printf("LOG BUF IS FULL write rec on pline %zu key %zu\n", hashed, key);
 get_free_buf:
-		// (1.1) Get a free log buf
+
+		/* (1.1) Get a free log buf at the head of the free pool*/
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
 		t1 = ut_time_us(NULL);
 #endif	
 		pfreepool = D_RW(ppl->free_pool);
 		pmemobj_rwlock_wrlock(pop, &pfreepool->lock);
-
 
 		TOID(PMEM_PAGE_LOG_BUF) free_buf = POBJ_LIST_FIRST (&pfreepool->head);
 		if (pfreepool->cur_free_bufs == 0 || 
@@ -1873,6 +1880,10 @@ get_free_buf:
 		mach_write_to_4(ptr, plogbuf->n_recs);
 		ptr += 4;
 
+		/*new, 4-byte hashed_id*/
+		mach_write_to_4(ptr, pline->hashed_id);
+		ptr += 4;
+
 		//fill zero the un-used len
 		uint64_t dif_len = plogbuf->size - plogbuf->cur_off;
 		if (dif_len > 0) {
@@ -1910,6 +1921,7 @@ get_free_buf:
 			plog_block->first_rec_size = rec_size;
 			plog_block->first_rec_type = type;
 
+			//printf("DEBUG full_block hashed %zu plogblock_id %zu add key %zu rec_size %zu type %zu firstLSN %zu space %zu page_no %zu is_dict %d\n", hashed, plog_block->id, key, rec_size, type, rec_lsn, space, page_no, is_dict);
 #if defined (UNIV_PMEMOBJ_PERSIST)
 			pmemobj_persist(pop, &plog_block->start_off, sizeof(plog_block->start_off));
 			pmemobj_persist(pop, &plog_block->start_diskaddr, sizeof(plog_block->start_diskaddr));
@@ -2017,6 +2029,8 @@ get_free_buf:
 
 			plog_block->first_rec_size = rec_size;
 			plog_block->first_rec_type = type;
+
+			//printf("DEBUG NON-full_block hashed %zu plogblock_id %zu add key %zu rec_size %zu type %zu firstLSN %zu space %zu page_no %zu is_dict %d\n", hashed, plog_block->id, key, rec_size, type, rec_lsn, space, page_no, is_dict);
 
 #if defined (UNIV_PMEMOBJ_PERSIST)
 			pmemobj_persist(pop, &plog_block->start_off, sizeof(plog_block->start_off));
@@ -3022,7 +3036,7 @@ assign_worker:
 				 * pm_log_flusher_worker() -> pm_log_batch_aio()
 				 * */
 				os_event_set(flusher->is_log_req_not_empty);
-				//see pm_flusher_worker() --> pm_buf_flush_list()
+				//see pm_logflusher_worker() --> pm_log_flush_log_buf() --> pm_log_fil_io()
 			}
 
 			if (flusher->n_requested >= flusher->size) {
@@ -3573,10 +3587,11 @@ pm_ppl_flush_page(
 		/*save the write_off before reseting*/	
 		block_id = plog_block->id;
 		write_off = plog_block->start_diskaddr + plog_block->start_off;
-
+		
+		//printf("reset plogblock id %zu key %zu space %zu page %zu on pline %zu \n", block_id, key, space, page_no, hashed);
 		__reset_page_log_block(plog_block);
 
-		pmemobj_rwlock_unlock(pop, &plog_block->lock);
+		//pmemobj_rwlock_unlock(pop, &plog_block->lock);
 
 #if defined (UNIV_PMEMOBJ_PERSIST)
 		pmemobj_persist(pop, plog_block, sizeof(PMEM_PAGE_LOG_BLOCK));
@@ -3589,6 +3604,7 @@ pm_ppl_flush_page(
 
 		/*remove corresponding keys from key_map*/
 		pline->key_map->erase(key_it);
+		pline->key_map->erase(key);
 
 		/*remove corresponding offset from offset_map*/
 		auto offset_it = pline->offset_map->find(write_off);
@@ -3602,17 +3618,22 @@ pm_ppl_flush_page(
 			assert(0);
 		}
 
-
+		pmemobj_rwlock_unlock(pop, &plog_block->lock);
+		/*if the flushing block is the oldest modified block in the pline, does following:
+		 * 1) check whether the checkpoint flag should updated
+		 * 2) update the pline->oldest_block_id
+		 * */
 		if (block_id == pline->oldest_block_id)
 		{
-
 			if (pline->offset_map->size() > 0){
 				/*need to update*/
 				auto it = pline->offset_map->begin();
 
 				PMEM_PAGE_LOG_BLOCK* pmin_log_block = it->second;
-				min_off = pmin_log_block->start_diskaddr + pmin_log_block->start_off;
+				assert(pmin_log_block);
 
+				min_off = pmin_log_block->start_diskaddr + pmin_log_block->start_off;
+				
 				if (min_off <= write_off){
 					printf("===> PMEM_ERROR in pm_ppl_flush_page, second smallest (%zu + %zu = %zu) must larger than the smallest write_off %zu",
 							pmin_log_block->start_diskaddr,
@@ -3634,6 +3655,8 @@ pm_ppl_flush_page(
 				pline->oldest_block_id = pmin_log_block->id;
 			}
 			else {
+				/*this flusing block is the last one in the pline
+				 **/
 				pline->oldest_block_id = ULONG_MAX;	
 				pline->is_req_checkpoint = false;
 			}
@@ -3643,9 +3666,22 @@ pm_ppl_flush_page(
 
 	} //end if 
 	else {
+
+		//Debug: manually double-check
+		int i;
+		for (i = 0; i < pline->max_blocks; i++){
+			plog_block = D_RW(D_RW(pline->arr)[i]);
+			if (! plog_block->is_free){
+				if (plog_block->key == key){
+					printf("key_map has problem!!! check it again. Clues: space %zu page %zu pageLSN %zu\n", space, page_no, pageLSN);
+					assert(0);
+				}
+			}
+		}
 		/* the dirty page hasn't exitst in hashmap 
 		 * do nothing
 		 * */
+		//printf("pm_ppl_flush() space %zu page %zu pageLSN %zu is not in hashmap, does nothing\n", space, page_no, pageLSN);
 	}
 
 	return;

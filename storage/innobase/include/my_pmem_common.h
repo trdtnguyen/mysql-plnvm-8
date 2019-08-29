@@ -64,8 +64,8 @@ static const size_t PMEM_GROUP_PARTITION_SIZE= 512;
 #define PMEM_MAX_LISTS_PER_BUCKET 2
 //#define PMEM_BUF_THRESHOLD 0.8
 
-//#define PMEM_LOG_BUF_HEADER_SIZE 4
-#define PMEM_LOG_BUF_HEADER_SIZE 8 /*4-byte real_len, 4-byte n_recs*/
+//#define PMEM_LOG_BUF_HEADER_SIZE 8 /*4-byte real_len, 4-byte n_recs*/
+#define PMEM_LOG_BUF_HEADER_SIZE 12 /*4-byte real_len, 4-byte n_recs 4-bytes hashed_id*/
 
 enum {
 	PMEM_READ = 1,
