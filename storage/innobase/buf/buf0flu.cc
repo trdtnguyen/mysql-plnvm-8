@@ -3945,8 +3945,10 @@ void pm_log_redoer_worker() {
 	pid_t thread_id;
 	ulint idx;
 	ulint lines_per_thread;
-	//int dist_mode = 2;
-	int dist_mode = 1;
+	
+	/*dist_mode=1 acquire mutex*/
+	int dist_mode = 2;
+	//int dist_mode = 1;
 
 	ulint start_time, end_time, e_time;
 
@@ -4010,38 +4012,24 @@ retry:
 
 				/***this call REDOing for a line ***/
 				if (redoer->phase == PMEM_REDO_PHASE1){
-					//printf("PMEM_REDO: start REDO_PHASE1 (scan and parse) line %zu ...\n", pline->hashed_id);
+					//printf("PMEM_REDO: start REDO_PHASE1 (scan and parse) line %zu idx %zu i %zu...\n", pline->hashed_id, idx, i);
 
-
-					//start_time = ut_time_us(NULL);
 					bool is_err = pm_ppl_redo_line(gb_pmw->pop, gb_pmw->ppl, pline);
-					//end_time = ut_time_us(NULL);
-
-					//recv_line->redo1_thread_id = idx; 	
-					//recv_line->redo1_start_time = start_time;
-					//recv_line->redo1_end_time = end_time;
-					//recv_line->redo1_elapse_time = (end_time - start_time);
 
 					if (is_err){
 						printf("PMEM_REDO: error redoing line %zu \n", pline->hashed_id);
 						assert(0);
 					}
-					//printf("PMEM_REDO: end REDO_PHASE1 (scan and parse) line %zu\n", pline->hashed_id);
+					//printf("PMEM_REDO: end REDO_PHASE1 (scan and parse) line %zu idx %zu i %zu \n", pline->hashed_id, idx, i);
 				}
 				else {
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu ...\n", pline->hashed_id);
 #endif
-					//start_time = ut_time_us(NULL);
 					pm_ppl_recv_apply_hashed_line(
 							gb_pmw->pop, gb_pmw->ppl,
 							pline, pline->recv_line->is_ibuf_avail);
-					//end_time = ut_time_us(NULL);
 
-					//recv_line->redo2_thread_id = idx; 	
-					//recv_line->redo2_start_time = start_time;
-					//recv_line->redo2_end_time = end_time;
-					//recv_line->redo2_elapse_time = (end_time - start_time);
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu\n", pline->hashed_id);
 #endif

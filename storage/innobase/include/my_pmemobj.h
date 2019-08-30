@@ -545,10 +545,6 @@ struct __pmem_page_part_log {
 	bool				is_redoing_done; /*true iff n_redoing_lines == 0*/
 	os_event_t redoing_done_event; //event for redoing
 	
-	/*In-mem space array, collected during PARSE phase 
-	 * and need to open by a single thread before APPLY*/
-	using Recv_Space_IDs = std::set<space_id_t>;
-	Recv_Space_IDs recv_space_ids;
 
 	/*DRAM Log File*/	
 	uint64_t			log_file_size;
@@ -723,28 +719,6 @@ struct __pmem_page_log_block {
  * folow the design of recv_sys_t in InnoDB
  */
 struct __pmem_recv_line {
-  //using Pages =
-  //    std::unordered_map<page_no_t, recv_addr_t *, std::hash<page_no_t>,
-  //                       std::equal_to<page_no_t>>;
-  ///** Every space has its own heap and pages that belong to it. */
-  //struct Space {
-  //  /** Constructor
-  //  @param[in,out]	heap	Heap to use for the log records. */
-  //  explicit Space(mem_heap_t *heap) : m_heap(heap), m_pages() {}
-
-  //  /** Default constructor */
-  //  Space() : m_heap(), m_pages() {}
-
-  //  /** Memory heap of log records and file addresses */
-  //  mem_heap_t *m_heap;
-
-  //  /** Pages that need to be recovered */
-  //  Pages m_pages;
-  //};
-  //using Missing_Ids = std::set<space_id_t>;
-
-  //using Spaces = std::unordered_map<space_id_t, Space, std::hash<space_id_t>,
-  //                                  std::equal_to<space_id_t>>;
 
 	PMEMrwlock		lock;
 
@@ -778,6 +752,11 @@ struct __pmem_recv_line {
 
 	/** MySQL 8.0 Hash table of pages, indexed by SpaceID. */
 	recv_sys_t::Spaces *spaces;
+
+	/*In-mem space array, collected during PARSE phase 
+	 * and need to open by a single thread before APPLY*/
+	using Recv_Space_IDs = std::set<space_id_t>;
+	Recv_Space_IDs recv_space_ids;
 
 	ulint			n_addrs;/*!< number of not processed pages in the hash table */
 	ulint			n_skip_done;/*!< number of not processed pages in the hash table */
@@ -1523,6 +1502,11 @@ pm_ppl_analysis(
 		PMEM_PAGE_PART_LOG*	ppl,
 		ulint*				global_max_lsn);
 
+void
+pm_ppl_open_spaces(
+		PMEMobjpool*		pop,
+		PMEM_PAGE_PART_LOG*	ppl
+		);
 void 
 pm_ppl_redo(
 		PMEMobjpool*		pop,

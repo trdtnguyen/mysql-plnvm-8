@@ -1931,7 +1931,7 @@ get_free_buf:
 #endif
 
 #if defined (UNIV_PMEM_SIM_LATENCY)
-		PMEM_DELAY(start_cycle, end_cycle, 5 * pmw->PMEM_SIM_CPU_CYCLES); 
+			PMEM_DELAY(start_cycle, end_cycle, 5 * pmw->PMEM_SIM_CPU_CYCLES); 
 #endif
 			//update the oldest
 			if (pline->oldest_block_id == UINT32_MAX) {
@@ -3604,7 +3604,7 @@ pm_ppl_flush_page(
 
 		/*remove corresponding keys from key_map*/
 		pline->key_map->erase(key_it);
-		pline->key_map->erase(key);
+		//pline->key_map->erase(key);
 
 		/*remove corresponding offset from offset_map*/
 		auto offset_it = pline->offset_map->find(write_off);
@@ -3668,16 +3668,16 @@ pm_ppl_flush_page(
 	else {
 
 		//Debug: manually double-check
-		int i;
-		for (i = 0; i < pline->max_blocks; i++){
-			plog_block = D_RW(D_RW(pline->arr)[i]);
-			if (! plog_block->is_free){
-				if (plog_block->key == key){
-					printf("key_map has problem!!! check it again. Clues: space %zu page %zu pageLSN %zu\n", space, page_no, pageLSN);
-					assert(0);
-				}
-			}
-		}
+	//	int i;
+	//	for (i = 0; i < pline->max_blocks; i++){
+	//		plog_block = D_RW(D_RW(pline->arr)[i]);
+	//		if (! plog_block->is_free){
+	//			if (plog_block->key == key){
+	//				printf("key_map has problem!!! check it again. Clues: space %zu page %zu pageLSN %zu\n", space, page_no, pageLSN);
+	//				assert(0);
+	//			}
+	//		}
+	//	}
 		/* the dirty page hasn't exitst in hashmap 
 		 * do nothing
 		 * */

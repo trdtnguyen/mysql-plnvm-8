@@ -993,8 +993,9 @@ void log_checkpointer(log_t *log_ptr) {
 	  }
 
       log_checkpointer_mutex_exit(log);
-	  /*checkpoint interval is 1s*/
-      os_event_wait_time_low(log.checkpointer_event, 3000 * 1000, sig_count);
+	  /*checkpoint interval in ms, 10ms is default*/
+      //os_event_wait_time_low(log.checkpointer_event, 3000 * 1000, sig_count);
+      os_event_wait_time_low(log.checkpointer_event, 10 * 1000, sig_count);
 
       log_checkpointer_mutex_enter(log);
 #else //original

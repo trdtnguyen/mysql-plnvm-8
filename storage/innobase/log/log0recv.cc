@@ -4199,7 +4199,7 @@ pm_ppl_recv_init(
 
 	n = ppl->n_buckets;
 	
-	new (&ppl->recv_space_ids) PMEM_PAGE_PART_LOG::Recv_Space_IDs();
+	//new (&ppl->recv_space_ids) PMEM_PAGE_PART_LOG::Recv_Space_IDs();
 	
 	if (IS_GLOBAL_HASHTABLE){
 		//A: allocate global recv_line
@@ -4238,6 +4238,8 @@ pm_ppl_recv_init(
 		recv_line->found_corrupt_log = false;
 		recv_line->found_corrupt_fs = false;
 		recv_line->mlog_checkpoint_lsn = 0;
+
+		new (&recv_line->recv_space_ids) PMEM_RECV_LINE::Recv_Space_IDs();
 
 		//recv_line->encryption_list = NULL;
 	} else {
@@ -4286,6 +4288,7 @@ pm_ppl_recv_init(
 			recv_line->found_corrupt_fs = false;
 			recv_line->mlog_checkpoint_lsn = 0;
 
+			new (&recv_line->recv_space_ids) PMEM_RECV_LINE::Recv_Space_IDs();
 			//recv_line->encryption_list = NULL;
 		} //end for
 	}
@@ -4307,7 +4310,7 @@ pm_ppl_recv_end(
 
 	n = ppl->n_buckets;
 
-	call_destructor(&ppl->recv_space_ids);
+	//call_destructor(&ppl->recv_space_ids);
 
 	if (IS_GLOBAL_HASHTABLE) {
 		//A: free global recv_line
@@ -4331,6 +4334,8 @@ pm_ppl_recv_end(
 		if (recv_line->heap != NULL) {
 			mem_heap_free(recv_line->heap);
 		}
+
+		call_destructor(&recv_line->recv_space_ids);
 
 		//ut_free(recv_line->buf);
 		free(recv_line);
@@ -4356,6 +4361,7 @@ pm_ppl_recv_end(
 					mem_heap_free(recv_line->heap);
 				}
 
+				call_destructor(&recv_line->recv_space_ids);
 				ut_free(recv_line->buf);
 				free(recv_line);
 				recv_line = NULL;
@@ -4365,6 +4371,43 @@ pm_ppl_recv_end(
 
 	//C: reset data structures in PPL
 	pm_ppl_reset_all(pop, ppl);
+}
+
+/*
+ * Util to open the spaces between REDO phase1 and REDO phase2
+ * This function is only called by the single master recovery thread
+ * */
+void
+pm_ppl_open_spaces(
+		PMEMobjpool*		pop,
+		PMEM_PAGE_PART_LOG*	ppl
+		)
+{
+	uint32_t n, i;
+	PMEM_PAGE_LOG_HASHED_LINE*	pline;
+	PMEM_RECV_LINE*				recv_line;
+
+	n = ppl->n_buckets;
+
+	for (i = 0; i < n; i++) {
+		pline = D_RW(D_RW(ppl->buckets)[i]);
+		recv_line = pline->recv_line;
+
+		for (auto space_id : recv_line->recv_space_ids){
+			fil_space_t* space_tem = fil_space_get(space_id);
+
+			if (space_tem == nullptr){
+				bool is_open_success = fil_tablespace_open_for_recovery(space_id);
+				printf("===> DEBUG: fil_tablespace_open_for_recovery() space %u return %d\n", space_id, is_open_success);
+
+				if (!is_open_success){
+					ut_ad(!fil_tablespace_lookup_for_recovery(space_id) ||
+							fsp_is_undo_tablespace(space_id));
+				}
+			} else {
+			}
+		} //end inner for
+	} //end outter for
 }
 
 /*
@@ -4450,20 +4493,9 @@ pm_ppl_recovery(
     //    return(err);
     //}
 	
-	for (auto space_id : ppl->recv_space_ids){
-		fil_space_t* space_tem = fil_space_get(space_id);
+	/*Open spaces in needed*/	
+	pm_ppl_open_spaces(pop, ppl);
 
-		if (space_tem == nullptr){
-			bool is_open_success = fil_tablespace_open_for_recovery(space_id);
-			printf("===> DEBUG: fil_tablespace_open_for_recovery() space %u return %d\n", space_id, is_open_success);
-
-			if (!is_open_success){
-				ut_ad(!fil_tablespace_lookup_for_recovery(space_id) ||
-						fsp_is_undo_tablespace(space_id));
-			}
-		} else {
-		}
-	}
     //we don't need to rescan because we put log recs in HASH table in the first scan
 
 
@@ -4683,8 +4715,8 @@ pm_ppl_redo(
 
 	/*disable is_multi_redo for debugging*/
 
-	bool is_multi_redo = false;
-	//bool is_multi_redo = true;
+	//bool is_multi_redo = false;
+	bool is_multi_redo = true;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE*		pline;
@@ -4842,8 +4874,9 @@ pm_ppl_redo_line(
 	recv_line->recovered_offset = 0;	
 	recv_line->n_addrs = 0;
 	
+	//why the old impl call this function?	
 	//simulate recv_sys_empty_hash()
-	pm_ppl_recv_line_empty_hash(pop, ppl, pline);
+	//pm_ppl_recv_line_empty_hash(pop, ppl, pline);
 
 	recv_line->parse_start_lsn = start_addr;
 	recv_line->scanned_lsn = pline->recv_lsn;
@@ -4870,7 +4903,7 @@ read_log_file:
     ///////////////////////////////////////////////////
     // (1) Scan phase: Build the recv buffer
     // ////////////////////////////////////////////////
-
+	
     if (cur_addr < pline->write_diskaddr){
         /*case A: pread n-bytes equal to logbuf size from log file on disk to recv_buf */
         scan_len = pline->write_diskaddr - cur_addr;
@@ -5199,9 +5232,9 @@ loop:
 		/*In MySLQ */
 		if (is_need){
 			/*new in MySQL 8.0 insert the space in the global space set*/
-			pmemobj_rwlock_wrlock(pop, &ppl->recv_lock);
-			ppl->recv_space_ids.insert(space);
-			pmemobj_rwlock_unlock(pop, &ppl->recv_lock);
+			//pmemobj_rwlock_wrlock(pop, &ppl->recv_lock);
+			recv_line->recv_space_ids.insert(space);
+			//pmemobj_rwlock_unlock(pop, &ppl->recv_lock);
 
 			if (!IS_GLOBAL_HASHTABLE){
 				pm_ppl_recv_add_to_hash_table(
