@@ -5971,7 +5971,8 @@ pm_ppl_recv_read_in_area(
 	n = 0;
 
 	std::array<page_no_t, RECV_READ_AHEAD_AREA> page_nos;
-
+	
+	/*This loop collect page_no in the hashtable of the recv_line*/
 	for (page_no_t page_no = low_limit;
 			page_no < low_limit + RECV_READ_AHEAD_AREA; ++page_no) {
 		recv_addr_t *recv_addr;
@@ -6338,27 +6339,6 @@ pm_ppl_recv_apply_hashed_line(
 		// * For each page of that space in the recv_line's hashtable
 		// * */
 		//dropped = false;
-
-		//if (space.first != TRX_SYS_SPACE){
-		//	fil_space_t* space_tem = fil_space_get(space.first);
-
-		//	/*Open the space for recovery if needed*/
-		//	if (space_tem == nullptr){
-		//		bool is_open_success = fil_tablespace_open_for_recovery(space.first);
-		//		printf("===> DEBUG: fil_tablespace_open_for_recovery() space %u return %d\n", space.first, is_open_success);
-
-		//		if (!is_open_success){
-		//			ut_ad(!fil_tablespace_lookup_for_recovery(space.first) ||
-		//					fsp_is_undo_tablespace(space.first));
-		//			dropped = true;
-		//		}
-		//	} else {
-		//		/* In PL-NVM, multiple threads may call this function at the same time
-		//		 * if you come here, this space has already opened by another thread 
-		//		 * */
-		//	}
-
-		//}
 
 		/*for each page in the hashmap Pages */
 		for (auto pages : space.second.m_pages) {

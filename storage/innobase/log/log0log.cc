@@ -797,7 +797,9 @@ void log_start_background_threads(log_t &log) {
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
   os_thread_create(log_checkpointer_thread_key, log_checkpointer, &log);
-
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  /*PL-NVM doesn't use below threads.*/
+#else //original
   os_thread_create(log_closer_thread_key, log_closer, &log);
 
   os_thread_create(log_writer_thread_key, log_writer, &log);
@@ -807,6 +809,7 @@ void log_start_background_threads(log_t &log) {
   os_thread_create(log_write_notifier_thread_key, log_write_notifier, &log);
 
   os_thread_create(log_flush_notifier_thread_key, log_flush_notifier, &log);
+#endif //UNIV_PMEMOBJ_PART_PL
 
   log_background_threads_active_validate(log);
 }
