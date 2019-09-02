@@ -849,6 +849,18 @@ void log_stop_background_threads(log_t &log) {
   os_event_set(log.closer_event);
   os_event_set(log.checkpointer_event);
 
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  /*Manual set those flags to falses
+   *because PL-NVM does not invoke those threads
+   * */
+  log.closer_thread_alive.store(false);
+  log.checkpointer_thread_alive.store(false);
+  log.writer_thread_alive.store(false);
+  log.flusher_thread_alive.store(false);
+  log.write_notifier_thread_alive.store(false);
+  log.flush_notifier_thread_alive.store(false);
+#endif //UNIV_PMEMOBJ_PART_PL
+
   /* Wait until threads are closed. */
   while (log.closer_thread_alive.load() ||
          log.checkpointer_thread_alive.load() ||
