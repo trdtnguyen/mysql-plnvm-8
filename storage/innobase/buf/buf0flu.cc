@@ -3946,9 +3946,10 @@ void pm_log_redoer_worker() {
 	ulint idx;
 	ulint lines_per_thread;
 	
-	/*dist_mode=1 acquire mutex*/
-	int dist_mode = 2;
-	//int dist_mode = 1;
+	/*dist_mode=1 acquire mutex
+	 * if skipping this, sometime a bug redoer->n_remain > 0 while redoer->workers == 0*/
+	//int dist_mode = 2;
+	int dist_mode = 1;
 
 	ulint start_time, end_time, e_time;
 
@@ -4026,10 +4027,12 @@ retry:
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu ...\n", pline->hashed_id);
 #endif
+					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu idx %zu i %zu ...\n", pline->hashed_id, idx, i);
 					pm_ppl_recv_apply_hashed_line(
 							gb_pmw->pop, gb_pmw->ppl,
 							pline, pline->recv_line->is_ibuf_avail);
 
+					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu idx %zu i %zu\n", pline->hashed_id, idx, i);
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu\n", pline->hashed_id);
 #endif

@@ -745,8 +745,11 @@ struct __pmem_recv_line {
 	bool		is_ibuf_avail; //used in applying phase
 
 	lsn_t		mlog_checkpoint_lsn;
-
-	mem_heap_t*	heap;	/*!< memory heap of log records and file addresses */
+	
+	/*MySQL 8.0 doesn't use heap on recv_sys
+	 *Instead it allocate heap for each space obj
+	 * */
+	//mem_heap_t*	heap;	/*!< memory heap of log records and file addresses */
 	ulint		alloc_hash_size; //allocated heap size
 	//hash_table_t*	addr_hash;/*!< MySQL 5.7 hash table of file addresses of pages */
 

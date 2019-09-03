@@ -2617,9 +2617,18 @@ files_checked:
 #if defined (UNIV_TRACE_RECOVERY_TIME)
 	start_tem1 = ut_time_us(NULL);
 #endif 
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	printf("InnoDB START calling buf_flush_sync_all_buf_pools() ...\n");
+#endif
+
     if (!srv_force_recovery && !srv_read_only_mode) {
       buf_flush_sync_all_buf_pools();
     }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	printf("InnoDB END buf_flush_sync_all_buf_pools()\n");
+#endif
 
     srv_dict_metadata = recv_recovery_from_checkpoint_finish(*log_sys, false);
 #if defined (UNIV_PMEMOBJ_PART_PL)

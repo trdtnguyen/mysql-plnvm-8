@@ -4207,9 +4207,9 @@ pm_ppl_recv_init(
 
 		ppl->recv_line = (PMEM_RECV_LINE*) malloc(sizeof(PMEM_RECV_LINE));
 		recv_line = ppl->recv_line;
-
-		recv_line->heap = mem_heap_create_typed(256,
-				MEM_HEAP_FOR_RECV_SYS);
+		
+		/*MySQL 8.0 doesn't use heap on recv_sys*/
+		//recv_line->heap = mem_heap_create_typed(256, MEM_HEAP_FOR_RECV_SYS);
 
 		recv_line-> buf = NULL;
 		recv_line->len = 0;
@@ -4253,12 +4253,11 @@ pm_ppl_recv_init(
 			pline->recv_line = (PMEM_RECV_LINE*) malloc(sizeof(PMEM_RECV_LINE));
 			recv_line = pline->recv_line;
 
-			//allocate heap
-			recv_line->heap = mem_heap_create_typed(256,
-					MEM_HEAP_FOR_RECV_SYS);
+			/*MySQL 8.0 doesn't use heap on recv_sys*/
+			//recv_line->heap = mem_heap_create_typed(256, MEM_HEAP_FOR_RECV_SYS);
 
 			/*the buffer*/
-			recv_line-> buf = static_cast<byte*>(
+			recv_line->buf = static_cast<byte*>(
 					ut_malloc_nokey(size));
 			recv_line->len = size;
 			recv_line->recovered_offset = 0;
@@ -4331,9 +4330,9 @@ pm_ppl_recv_end(
 			}
 		}
 
-		if (recv_line->heap != NULL) {
-			mem_heap_free(recv_line->heap);
-		}
+		//if (recv_line->heap != NULL) {
+		//	mem_heap_free(recv_line->heap);
+		//}
 
 		call_destructor(&recv_line->recv_space_ids);
 
@@ -4357,9 +4356,9 @@ pm_ppl_recv_end(
 					}
 				}
 
-				if (recv_line->heap != NULL) {
-					mem_heap_free(recv_line->heap);
-				}
+				//if (recv_line->heap != NULL) {
+				//	mem_heap_free(recv_line->heap);
+				//}
 
 				call_destructor(&recv_line->recv_space_ids);
 				ut_free(recv_line->buf);
@@ -5518,9 +5517,12 @@ pm_ppl_recv_add_to_hash_table(
 
 	len = rec_end - body;
 	
-	/*(1) allocate recv obj to capture the log record */
-	recv = static_cast<recv_t*>(
-		mem_heap_alloc(recv_line->heap, sizeof(recv_t)));
+	/*(1) allocate recv obj using space's heap to capture the log record 
+	 * MySQL 5.7: Using heap from recv_line
+	 * MySQL 8.0: Using heap from the space
+	 * */
+	//recv = static_cast<recv_t*>(mem_heap_alloc(recv_line->heap, sizeof(recv_t))); //MySQL 5.7
+	recv = static_cast<recv_t*>(mem_heap_alloc(space->m_heap, sizeof(recv_t))); //MySQL 8.0
 
 	recv->type = type;
 	recv->len = rec_end - body;
@@ -5583,9 +5585,9 @@ pm_ppl_recv_add_to_hash_table(
 			len = RECV_DATA_BLOCK_SIZE;
 		}
 
-		recv_data = static_cast<recv_data_t*>(
-			mem_heap_alloc(recv_line->heap,
-				       sizeof(recv_data_t) + len));
+		recv_data = static_cast<recv_data_t*>
+			//(mem_heap_alloc(recv_line->heap, sizeof(recv_data_t) + len));
+			(mem_heap_alloc(space->m_heap, sizeof(recv_data_t) + len));
 
 		*prev_field = recv_data;
 
@@ -5605,8 +5607,8 @@ pm_ppl_recv_get_page_map(
 		space_id_t space_id,
 		bool create) 
 {
-
   auto it = recv_line->spaces->find(space_id);
+
   if (it != recv_line->spaces->end()) {
     return (&it->second);
 
@@ -5623,6 +5625,8 @@ pm_ppl_recv_get_page_map(
 
     return (&where->second);
   }
+  /*if create==false then return NULL*/
+  return (nullptr);
 }
 
 ulint
@@ -5681,6 +5685,7 @@ pm_ppl_recv_get_rec(
 
 /*
  *Simulate recv_recover_page_func()
+ Be awared that this is multiple thread access function
  Note that this function is called from two different threads
  Thread 1: recovery thread in pm_ppl_recv_apply_hashed_line -> pm_ppl_recv_recover_page_func() 
  Thread 2: IO thread -> fil_io_wait() -> buf_page_io_complete() -> recv_recover_page_func() -> pm_ppl_recv_recover_page_func()
@@ -5769,9 +5774,12 @@ pm_ppl_recv_recover_page_func(
 	page_zip = buf_block_get_page_zip(block);
 
 	if (just_read_in) {
+		/*PL-NVM doesn't use n_read_done now*/
+		/*
 		pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
 		recv_line->n_read_done++;
 		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+		*/
 
 		/* Move the ownership of the x-latch on the page to
 		this OS thread, so that we can acquire a second
@@ -5850,7 +5858,8 @@ pm_ppl_recv_recover_page_func(
 
 		if (recv->start_lsn >= page_lsn
 #ifndef UNIV_HOTBACKUP
-				&& undo::is_active(recv_addr->space)
+				/*PL_NVM skip this check (high overhead check)*/
+				//&& undo::is_active(recv_addr->space)
 #endif /* !UNIV_HOTBACKUP */
 		   ) {
 
