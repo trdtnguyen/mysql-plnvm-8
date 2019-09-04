@@ -99,7 +99,8 @@ this must be less than UNIV_PAGE_SIZE as it is stored in the buffer pool */
 
 /** Read-ahead area in applying log records to file pages */
 #if defined (UNIV_PMEMOBJ_PART_PL)
-static const size_t RECV_READ_AHEAD_AREA = 16;
+//static const size_t RECV_READ_AHEAD_AREA = 16;
+static const size_t RECV_READ_AHEAD_AREA = 64;
 #else //original
 static const size_t RECV_READ_AHEAD_AREA = 32;
 #endif //UNIV_PMEMOBJ_PART_PL
@@ -514,7 +515,11 @@ void recv_sys_var_init() {
   recv_previous_parsed_rec_type = MLOG_SINGLE_REC_FLAG;
   recv_previous_parsed_rec_offset = 0;
   recv_previous_parsed_rec_is_multi = 0;
+#if defined (UNIV_PMEMOBJ_PART_PL)
+  recv_n_pool_free_frames = PMEM_N_POOL_FREE_FRAMES;
+#else
   recv_n_pool_free_frames = 256;
+#endif
   recv_max_page_lsn = 0;
 }
 #endif /* !UNIV_HOTBACKUP */
@@ -611,7 +616,7 @@ void recv_sys_init(ulint max_mem) {
       (buf_pool_get_curr_size() >= ((512 + 128) * UNIV_PAGE_SIZE))) {
     /* Buffer pool of size greater than 10 MB. */
 #if defined (UNIV_PMEMOBJ_PART_PL)
-	  recv_n_pool_free_frames = 1024;
+	  recv_n_pool_free_frames = PMEM_N_POOL_FREE_FRAMES;
 #else //original
 	  recv_n_pool_free_frames = 512;
 #endif //UNIV_PMEMOBJ_PART_PL
@@ -1740,6 +1745,14 @@ static byte *recv_parse_or_apply_log_rec_body(
     default:
       break;
   }
+#if defined (UNIV_PMEMOBJ_PART_PL)
+//  if(!gb_pmw->ppl->is_new){
+//	  /*In PM-PPL REDO1 just return here*/
+//	  if (block == nullptr){
+//		  return nullptr;
+//	  }
+//  }
+#endif //UNIV_PMEMOBJ_PART_PL
 
   page_t *page;
   page_zip_des_t *page_zip;
@@ -5414,9 +5427,11 @@ pm_ppl_recv_parse_log_rec(
 	/*we reuse this function, at this time only parse, not apply. The return pointer is the next byte after the body 
 	 * Note: In MySQL 8.0, there is an additional param at the end of recv_parse_or_apply_log_rec_body() compared to MySQL 5.7. The param just for assert(), just set it to 0
 	 * */
-	//new_ptr = recv_parse_or_apply_log_rec_body(
-	//	*type, new_ptr, end_ptr, *space, *page_no, NULL, NULL);
-	new_ptr = recv_parse_or_apply_log_rec_body(
+	
+//	new_ptr = recv_parse_or_apply_log_rec_body(
+//		*type, new_ptr, end_ptr, *space, *page_no, NULL, NULL, 0);
+
+	recv_parse_or_apply_log_rec_body(
 		*type, new_ptr, end_ptr, *space, *page_no, NULL, NULL, 0);
 
 	if (recv_line != NULL){
@@ -5430,16 +5445,16 @@ pm_ppl_recv_parse_log_rec(
 	}
 
 	//check ( (new_ptr - ptr) == rec_len)
-	if ( (new_ptr - ptr) != rec_len) {
-		printf("PMEM_WARN parsed len %zu differ to check len %u at rec type %d space %u page %u\n", (new_ptr - ptr), rec_len, *type, *space, *page_no);
-		assert ( (new_ptr - ptr) == rec_len);
-	}
+	//if ( (new_ptr - ptr) != rec_len) {
+	//	printf("PMEM_WARN parsed len %zu differ to check len %u at rec type %d space %u page %u\n", (new_ptr - ptr), rec_len, *type, *space, *page_no);
+	//	assert ( (new_ptr - ptr) == rec_len);
+	//}
 
 	*is_need = true;
 	*parse_res = PMEM_PARSE_NEED;
 
-	return(new_ptr - ptr);
-	//return(rec_len);
+	//return(new_ptr - ptr);
+	return(rec_len);
 }
 
 /*simulate recv_sys_empty_hash()
@@ -5732,8 +5747,12 @@ pm_ppl_recv_recover_page_func(
 		 * Log records should not be applied now */
 		return;
 	}
-
-	pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+	
+	/*why we need the lock here?
+	 *If we ensure that at most one thread could access on the corresponding recv_addr of a page at the time, then mutex is unnecessary.
+	 The problem with the old design is pm_ppl_recv_read_in_area() read the seqnential pages as batch. So there is contention between two threads (the redoer worker and the IO thread) access on a page.
+	 * */
+	//pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
 
 	recv_addr = pm_ppl_recv_get_rec(recv_line, block->page.id.space(), block->page.id.page_no());
 
@@ -5742,7 +5761,7 @@ pm_ppl_recv_recover_page_func(
 	    || (recv_addr->state == RECV_PROCESSED)) {
 		ut_ad(recv_addr == nullptr || recv_needed_recovery);
 
-		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+		//pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 		return;
 	}
 
@@ -5765,7 +5784,7 @@ pm_ppl_recv_recover_page_func(
 
 	recv_addr->state = RECV_BEING_PROCESSED;
 
-	pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+	//pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 
 	mtr_start(&mtr);
 	mtr_set_log_mode(&mtr, MTR_LOG_NONE);
@@ -6133,7 +6152,14 @@ pm_ppl_recv_apply_prior_pages(
 /*
  * REDO2 (APPLY PHASE) 
  * Simulate recv_apply_hashed_log_recs()
- * for each line, get recv from hashtable and apply it to data page
+ * Thread coordinator (create/close threads). The logic steps are:
+ *
+ * (1) create redoer threads
+ * (2) assign each redoer thread with number of plines
+ * (3) trigger the redoer thread. Worker thread in turned, call pm_ppl_recv_apply_hashed_line()
+ * (4) wait until the last pline is completly applied REDO logs then return to the caller
+ *
+ * See pm_log_redoer_worker()
  * */
 void
 pm_ppl_recv_apply_hashed_log_recs(
@@ -6300,19 +6326,18 @@ pm_ppl_recv_check_hashed_line()
  * */
 void
 pm_ppl_recv_apply_hashed_line(
-	PMEMobjpool*		pop,
-	PMEM_PAGE_PART_LOG*	ppl,
-	PMEM_PAGE_LOG_HASHED_LINE* pline,
-	ibool	allow_ibuf)
+	PMEMobjpool*				pop,
+	PMEM_PAGE_PART_LOG*			ppl,
+	PMEM_PAGE_LOG_HASHED_LINE*	pline,
+	ibool						allow_ibuf)
 {
-	recv_addr_t* recv_addr;
-	ulint	i;
-	ulint	cnt, cnt2;
-	ulint	n, n_cells;
-	mtr_t	mtr;
-
-	
+	recv_addr_t*	recv_addr;
+	ulint			i;
+	ulint			cnt, cnt2;
+	ulint			n, n_cells;
+	mtr_t			mtr;
 	PMEM_RECV_LINE* recv_line;
+
 	if (pline != NULL){ 
 		recv_line	= pline->recv_line;
 	} else {
@@ -6336,51 +6361,35 @@ pm_ppl_recv_apply_hashed_line(
 	cnt2 = 10;
 
 	n = recv_line->n_addrs;
+	
+	/*A. New implementation, combine read in area*/
+	std::array<page_no_t, RECV_READ_AHEAD_AREA> page_nos;
+	ulint n_pages = 0;
 
-	/*for each space in the hashmap Spaces*/
+	/*for each space in the map Spaces*/
 	for (const auto &space : *recv_line->spaces) {
-
-		//bool dropped;
-		///*
-		// * Logic for APPLY phase:
-		// * 1) For each space in the recv_line
-		// * Open the space if it hasn't opened yet
-		// * For each page of that space in the recv_line's hashtable
-		// * */
-		//dropped = false;
 
 		/*for each page in the hashmap Pages */
 		for (auto pages : space.second.m_pages) {
-		//	ut_ad(pages.second->space == space.first);
 
-		//	if (dropped) {
-		//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
-		//		pages.second->state = RECV_DISCARDED;
-		//		recv_line->n_addrs--;
-		//		recv_line->n_skip_done++;
-		//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
-		//		continue;
-		//	}
-
-		//	if (pages.second->state == RECV_DISCARDED) {
-		//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
-		//		ut_a(recv_line->n_addrs);
-		//		recv_line->n_addrs--;
-		//		recv_line->n_skip_done++;
-		//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
-		//		continue;
-		//	}
-
-			//recv_apply_log_rec(pages.second);
-			/*simulate recv_apply_log_rec()*/
-			//TODO: see recv_apply_log_rec() and compare with our function in MySQL 5.7 to continue.
 			recv_addr = pages.second;
-			const page_id_t		page_id(recv_addr->space,
-							recv_addr->page_no);
-			bool			found;
+
+			if (recv_addr->state == RECV_DISCARDED) {
+				pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+				ut_a(recv_line->n_addrs);
+				recv_line->n_addrs--;
+				recv_line->n_skip_done++;
+				pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+				continue;
+			}
+
+			const page_id_t		page_id(recv_addr->space, recv_addr->page_no);
+			bool				found;
 			const page_size_t page_size =
 				fil_space_get_page_size(recv_addr->space, &found);
+
 			ut_ad(found);
+
 			if (recv_addr->state == RECV_NOT_PROCESSED) {
 				if (buf_page_peek(page_id)) {
 					/*page is cached, directly recover it*/
@@ -6391,26 +6400,28 @@ pm_ppl_recv_apply_hashed_line(
 					block = buf_page_get( page_id, page_size, RW_X_LATCH, &mtr);
 
 					buf_block_dbg_add_level(block, SYNC_NO_ORDER_CHECK);
-
+					
+					/*apply REDO logs from the hashtable on cache page
+					 *This function also response for reduce recv_line->n_addrs by one
+					 * */
 					pm_ppl_recv_recover_page_func(pop, ppl, pline, FALSE, block);
-
-					pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
-					recv_line->n_cache_done++;
-					pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 
 					mtr_commit(&mtr);
 				} else {
-					/* page is not cached, fetch it from disk and apply is done in IO thread -> pm_ppl_recv_recover_page_func */
-					pm_ppl_recv_read_in_area (pop, ppl, recv_line, page_id);
-				}
-			}
+					/*we combine what recv_read_in_area here*/
+					recv_addr->state = RECV_BEING_READ;
+					page_nos[n_pages] = recv_addr->page_no;
+					++n_pages;
 
-			cnt++;
+					if (n_pages >= RECV_READ_AHEAD_AREA){
+						pm_ppl_buf_read_recv_pages(pop, ppl, recv_line, FALSE, space.first, &page_nos[0], n_pages);
 
-			if (IS_GLOBAL_HASHTABLE){
-				if (cnt * 1.0 * 100 / n > cnt2){
-					printf("Global HT, Apply cell %zu / %zu cnt %zu cnt2 %zu percentage processed \n", i, n_cells, cnt, cnt2);
-					cnt2 += 10;
+						/*reset*/
+						//std::fill_n(page_nos, n_pages, 0);
+						page_nos.fill(0);
+						n_pages = 0;
+					}
+					//pm_ppl_recv_read_in_area (pop, ppl, recv_line, page_id);
 				}
 			}
 
@@ -6419,12 +6430,90 @@ pm_ppl_recv_apply_hashed_line(
 				return;
 			}
 		} //end inner for
+		/*now we read all remains pages in current space for REDOing*/
+		pm_ppl_buf_read_recv_pages(pop, ppl, recv_line, FALSE, space.first, &page_nos[0], n_pages);
+
+		/*reset*/
+		page_nos.fill(0);
+		n_pages = 0;
 
 		if (recv_line->n_addrs == 0){
 			//The REDO finished by AIO threads
 			return;
 		}
 	} //end outer for
+
+	/*B. Old implementation*/
+//
+//	/*for each space in the hashmap Spaces*/
+//	for (const auto &space : *recv_line->spaces) {
+//		/*for each page in the hashmap Pages */
+//		for (auto pages : space.second.m_pages) {
+//
+//			//recv_apply_log_rec(pages.second);
+//			/*simulate recv_apply_log_rec()*/
+//			//TODO: see recv_apply_log_rec() and compare with our function in MySQL 5.7 to continue.
+//			recv_addr = pages.second;
+//
+//			if (recv_addr->state == RECV_DISCARDED) {
+//				pmemobj_rwlock_wrlock(pop, &recv_line->lock);	
+//				ut_a(recv_line->n_addrs);
+//				recv_line->n_addrs--;
+//				recv_line->n_skip_done++;
+//				pmemobj_rwlock_unlock(pop, &recv_line->lock);	
+//				continue;
+//			}
+//
+//			const page_id_t		page_id(recv_addr->space, recv_addr->page_no);
+//			bool				found;
+//			const page_size_t page_size =
+//				fil_space_get_page_size(recv_addr->space, &found);
+//
+//			ut_ad(found);
+//
+//			if (recv_addr->state == RECV_NOT_PROCESSED) {
+//				if (buf_page_peek(page_id)) {
+//					/*page is cached, directly recover it*/
+//					buf_block_t*	block;
+//
+//					mtr_start(&mtr);
+//
+//					block = buf_page_get( page_id, page_size, RW_X_LATCH, &mtr);
+//
+//					buf_block_dbg_add_level(block, SYNC_NO_ORDER_CHECK);
+//					
+//					/*apply REDO logs from the hashtable on cache page
+//					 *This function also response for reduce recv_line->n_addrs by one
+//					 * */
+//					pm_ppl_recv_recover_page_func(pop, ppl, pline, FALSE, block);
+//
+//					mtr_commit(&mtr);
+//				} else {
+//					/* page is not cached, fetch it from disk and apply is done in IO thread -> pm_ppl_recv_recover_page_func */
+//					pm_ppl_recv_read_in_area (pop, ppl, recv_line, page_id);
+//				}
+//			}
+//
+//			cnt++;
+//
+//			if (IS_GLOBAL_HASHTABLE){
+//				if (cnt * 1.0 * 100 / n > cnt2){
+//					printf("Global HT, Apply cell %zu / %zu cnt %zu cnt2 %zu percentage processed \n", i, n_cells, cnt, cnt2);
+//					cnt2 += 10;
+//				}
+//			}
+//
+//			if (recv_line->n_addrs == 0){
+//				//The REDO finished by AIO threads
+//				return;
+//			}
+//		} //end inner for
+//
+//		if (recv_line->n_addrs == 0){
+//			//The REDO finished by AIO threads
+//			return;
+//		}
+//	} //end outer for
 	
 }
 ////////////////////////////////////////////////////////

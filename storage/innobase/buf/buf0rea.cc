@@ -759,20 +759,11 @@ pm_ppl_buf_read_recv_pages(
 			//tdnguyen test
 			printf("tdnguyen test, Pending reads overload buf_pool->n_pend_reads %zu >= recv_n_pool_free_frames / 2 %zu \n", buf_pool->n_pend_reads, recv_n_pool_free_frames / 2
 					);
-
 			os_aio_simulated_wake_handler_threads();
 			os_thread_sleep(10000);
+			//os_thread_sleep(1000);
 
 			count++;
-
-			if (!(count % 1000)) {
-
-				ib::error()
-					<< "Waited for " << count / 100
-					<< " seconds for "
-					<< buf_pool->n_pend_reads
-					<< " pending reads";
-			}
 		}
 		/*read_ret: 1 read req is queued
 		 *			0 page is in buffer pool or in DWB
@@ -787,9 +778,6 @@ pm_ppl_buf_read_recv_pages(
 			recv_line->n_read_reqs++;
 		} else {
 			/*page has already in buffer pool or we should not recover this page*/
-	//		pmemobj_rwlock_wrlock(pop, &recv_line->lock);
-	//		recv_line->n_addrs--;
-	//		pmemobj_rwlock_unlock(pop, &recv_line->lock);	
 		}
 
 	}

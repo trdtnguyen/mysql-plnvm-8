@@ -13,6 +13,10 @@
 //random number for checking AIO
 #define PMEM_AIO_CHECK 7988
 
+/*used when read batch of pages in recovery*/
+//#define PMEM_N_POOL_FREE_FRAMES  1024
+#define PMEM_N_POOL_FREE_FRAMES  512
+
 //wait for a aio write, call when there is no free block
 #define PMEM_WAIT_FOR_WRITE 200
 #define PMEM_WAIT_FOR_FREE_LIST 10000
