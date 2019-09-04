@@ -4025,16 +4025,14 @@ retry:
 				}
 				else {
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
-					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu ...\n", pline->hashed_id);
-#endif
 					printf("PMEM_REDO: start REDO_PHASE2 (applying) line %zu idx %zu i %zu ...\n", pline->hashed_id, idx, i);
+#endif
 					pm_ppl_recv_apply_hashed_line(
 							gb_pmw->pop, gb_pmw->ppl,
 							pline, pline->recv_line->is_ibuf_avail);
 
-					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu idx %zu i %zu\n", pline->hashed_id, idx, i);
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
-					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu\n", pline->hashed_id);
+					printf("PMEM_REDO: end REDO_PHASE2 (applying) line %zu idx %zu i %zu\n", pline->hashed_id, idx, i);
 #endif
 				}
 
