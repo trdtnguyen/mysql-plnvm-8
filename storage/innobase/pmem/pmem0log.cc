@@ -209,7 +209,7 @@ pm_wrapper_page_log_close(
 	os_event_destroy(ppl->free_log_pool_event);
 	os_event_destroy(ppl->redoing_done_event);
 
-	pm_page_part_log_hash_free(pmw->pop, pmw->ppl);
+	//pm_page_part_log_hash_free(pmw->pop, pmw->ppl);
 
 	pm_close_and_free_log_files(pmw->ppl);	
 
@@ -889,8 +889,8 @@ pm_ppl_init_in_mem(
 		/*Note that each pline must have distinct os event*/
 		sprintf(sbuf,"pm_line_log_flush_event%zu", i);
 		pline->log_flush_event = os_event_create(sbuf);
+
 		/*the map*/
-		//pline->offset_map = new std::map<uint64_t, uint32_t>();
 		pline->key_map = new KEY_MAP();
 		pline->offset_map = new OFFSET_MAP();
 	}
@@ -914,7 +914,15 @@ pm_ppl_free_in_mem(
 		os_event_destroy(pline->log_flush_event);
 
 		/*the map*/
-		free(pline->offset_map);
+		if (pline->key_map != nullptr) {
+			free(pline->key_map);
+			pline->key_map = nullptr;
+		}
+		
+		if (pline->offset_map != nullptr) {
+			free(pline->offset_map);
+			pline->offset_map = nullptr;
+		}
 	}
 }
 

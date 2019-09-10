@@ -4742,8 +4742,8 @@ pm_ppl_redo(
 
 	/*disable is_multi_redo for debugging*/
 
-	bool is_multi_redo = false;
-	//bool is_multi_redo = true;
+	//bool is_multi_redo = false;
+	bool is_multi_redo = true;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE*		pline;

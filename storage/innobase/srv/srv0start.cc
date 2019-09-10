@@ -2631,11 +2631,11 @@ files_checked:
 #endif
 
     srv_dict_metadata = recv_recovery_from_checkpoint_finish(*log_sys, false);
-#if defined (UNIV_PMEMOBJ_PART_PL)
-		if (!gb_pmw->ppl->is_new){
-			pm_ppl_recv_end(gb_pmw->pop, gb_pmw->ppl);
-		}
-#endif
+//#if defined (UNIV_PMEMOBJ_PART_PL)
+//		if (!gb_pmw->ppl->is_new){
+//			pm_ppl_recv_end(gb_pmw->pop, gb_pmw->ppl);
+//		}
+//#endif
 
 
     if (!srv_force_recovery && !recv_sys->found_corrupt_log &&
@@ -2763,6 +2763,12 @@ files_checked:
 
       log_buffer_flush_to_disk(*log_sys);
     }
+
+#if defined (UNIV_PMEMOBJ_PART_PL)
+	if (!gb_pmw->ppl->is_new){
+		pm_ppl_recv_end(gb_pmw->pop, gb_pmw->ppl);
+	}
+#endif
 
 #if defined (UNIV_TRACE_RECOVERY_TIME)
 		start_create_undo_time = ut_time_us(NULL);
@@ -3468,7 +3474,12 @@ static lsn_t srv_shutdown_log() {
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
 #if defined (UNIV_PMEMOBJ_PART_PL)
-  const lsn_t lsn = pm_ppl_get_max_lsn(gb_pmw->pop, gb_pmw->ppl);
+  lsn_t lsn = pm_ppl_get_max_lsn(gb_pmw->pop, gb_pmw->ppl);
+
+  if (lsn < LOG_START_LSN) {
+	  lsn = LOG_START_LSN + LOG_BLOCK_HDR_SIZE;
+  }
+
   log_sys->sn = log_translate_lsn_to_sn(lsn);
   log_sys->last_checkpoint_lsn.store(lsn);
   //update the log_sys->lsn
