@@ -1746,6 +1746,10 @@ static byte *recv_parse_or_apply_log_rec_body(
       break;
   }
 #if defined (UNIV_PMEMOBJ_PART_PL)
+/*This optimization let the REDO phase 1 finish earlier by just parsing
+ * the header of the REDO log.
+ * It reduce the the REDO1 duration. However, it increase the REDO2
+ * time. So I skip this optimization now*/
 //  if(!gb_pmw->ppl->is_new){
 //	  /*In PM-PPL REDO1 just return here*/
 //	  if (block == nullptr){
@@ -4253,6 +4257,7 @@ pm_ppl_recv_init(
 		recv_line->mlog_checkpoint_lsn = 0;
 
 		new (&recv_line->recv_space_ids) PMEM_RECV_LINE::Recv_Space_IDs();
+		recv_line->metadata_recover = UT_NEW_NOKEY(MetadataRecover());
 
 		//recv_line->encryption_list = NULL;
 	} else {
@@ -4302,6 +4307,7 @@ pm_ppl_recv_init(
 
 			new (&recv_line->recv_space_ids) PMEM_RECV_LINE::Recv_Space_IDs();
 			//recv_line->encryption_list = NULL;
+			recv_line->metadata_recover = UT_NEW_NOKEY(MetadataRecover());
 		} //end for
 	}
 }
@@ -4348,6 +4354,8 @@ pm_ppl_recv_end(
 		//}
 
 		call_destructor(&recv_line->recv_space_ids);
+		UT_DELETE(recv_line->metadata_recover);
+		recv_line->metadata_recover = nullptr;
 
 		//ut_free(recv_line->buf);
 		free(recv_line);
@@ -4374,6 +4382,9 @@ pm_ppl_recv_end(
 				//}
 
 				call_destructor(&recv_line->recv_space_ids);
+				UT_DELETE(recv_line->metadata_recover);
+				recv_line->metadata_recover = nullptr;
+
 				ut_free(recv_line->buf);
 				free(recv_line);
 				recv_line = NULL;
@@ -4478,6 +4489,10 @@ pm_ppl_recovery(
 	max_recovered_lsn = pm_ppl_recv_get_max_recovered_lsn(
 		pop, ppl);	
 	
+	/*if the PL-NVM has no REDO logs, then max_recovered_lsn is 0, that cause some assertions*/	
+	if (max_recovered_lsn < LOG_START_LSN){
+		max_recovered_lsn = LOG_START_LSN + LOG_BLOCK_HDR_SIZE;
+	}
 
     /* all code related with checkpoint is removed because we don't use checkpoint
     
@@ -4727,8 +4742,8 @@ pm_ppl_redo(
 
 	/*disable is_multi_redo for debugging*/
 
-	//bool is_multi_redo = false;
-	bool is_multi_redo = true;
+	bool is_multi_redo = false;
+	//bool is_multi_redo = true;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE*		pline;
@@ -5344,6 +5359,38 @@ pm_ppl_recv_parse_log_rec(
 		recv_line->found_corrupt_log = true;
 		assert(0);
 		return(0);
+    case MLOG_TABLE_DYNAMIC_META:
+    case MLOG_TABLE_DYNAMIC_META | MLOG_SINGLE_REC_FLAG:
+
+      table_id_t id;
+      uint64 version;
+
+      *page_no = FIL_NULL;
+      *space = SPACE_UNKNOWN;
+	  /*parse a dictionary log record is similar to a regular log record
+	   *we also read 2-byte rec_len and 8-byte lsn
+	   * */
+      new_ptr =
+          mlog_parse_initial_dict_log_record(ptr, end_ptr, type, &id, &version);
+
+	  rec_len = mach_read_from_2(new_ptr);
+	  assert(rec_len > 0);
+	  new_ptr += 2;
+
+	  *rec_lsn = mach_read_from_8(new_ptr);
+	  new_ptr += 8;
+
+      if (new_ptr != nullptr) {
+        new_ptr = recv_line->metadata_recover->parseMetadataLog(
+            id, version, new_ptr, end_ptr);
+      }
+
+	  if ( (new_ptr - ptr) != rec_len) {
+		  printf("PMEM_WARN parsed len %zu differ to check len %u at rec type %d id %zu version %zu\n", (new_ptr - ptr), rec_len, *type, id, version);
+		  assert ( (new_ptr - ptr) == rec_len);
+	  }
+
+      return (new_ptr == nullptr ? 0 : new_ptr - ptr);
 	}//end switch
 	
 	//(2) Parse the log header to get space, page_no

@@ -286,7 +286,7 @@ pm_page_part_log_bucket_reset(
 		// (4) logbuf
 		
 		PMEM_PAGE_LOG_BUF* plogbuf = D_RW(pline->logbuf);
-		plogbuf->pmemaddr = 0;
+		//plogbuf->pmemaddr = 0;
 		plogbuf->state = PMEM_LOG_BUF_FREE;
 		plogbuf->cur_off = PMEM_LOG_BUF_HEADER_SIZE;
 		plogbuf->n_recs = 0;
@@ -295,10 +295,14 @@ pm_page_part_log_bucket_reset(
 		TOID_ASSIGN(plogbuf->prev, OID_NULL);
 		TOID_ASSIGN(pline->tail_logbuf, (pline->logbuf).oid);
 
+		// (5) Maps
+		pline->key_map->clear();
+		pline->offset_map->clear();
+
     } //end for each line
 
-	pm_page_part_log_hash_free(pop, ppl);
-	pm_page_part_log_hash_create(pop, ppl);
+	//pm_page_part_log_hash_free(pop, ppl);
+	//pm_page_part_log_hash_create(pop, ppl);
 }
 
 void
@@ -1193,6 +1197,7 @@ pm_page_part_log_hash_create(
 		pline = D_RW(D_RW(ppl->buckets)[i]);
 		//pline->addr_hash = hash_create(k);
 		pline->key_map = new KEY_MAP();
+		pline->offset_map = new OFFSET_MAP();
 	}
 }
 
@@ -1207,7 +1212,11 @@ pm_page_part_log_hash_free(
 	for (i = 0; i < ppl->n_buckets; i++) {
 		pline = D_RW(D_RW(ppl->buckets)[i]);
 		//hash_table_free(pline->addr_hash);
+		pline->key_map->clear();
 		free (pline->key_map);
+
+		pline->offset_map->clear();
+		free (pline->offset_map);
 	}
 }
 
@@ -3635,7 +3644,7 @@ pm_ppl_flush_page(
 				min_off = pmin_log_block->start_diskaddr + pmin_log_block->start_off;
 				
 				if (min_off <= write_off){
-					printf("===> PMEM_ERROR in pm_ppl_flush_page, second smallest (%zu + %zu = %zu) must larger than the smallest write_off %zu",
+					printf("===> PMEM_ERROR in pm_ppl_flush_page, second smallest (%zu + %zu = %zu) must larger than the smallest write_off %zu\n",
 							pmin_log_block->start_diskaddr,
 							pmin_log_block->start_off,
 							pmin_log_block->start_diskaddr + pmin_log_block->start_off,

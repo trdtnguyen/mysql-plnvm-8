@@ -756,6 +756,9 @@ struct __pmem_recv_line {
 	/** MySQL 8.0 Hash table of pages, indexed by SpaceID. */
 	recv_sys_t::Spaces *spaces;
 
+	/*MySQL 8.0 metadata recover utility*/
+	MetadataRecover *metadata_recover;
+
 	/*In-mem space array, collected during PARSE phase 
 	 * and need to open by a single thread before APPLY*/
 	using Recv_Space_IDs = std::set<space_id_t>;

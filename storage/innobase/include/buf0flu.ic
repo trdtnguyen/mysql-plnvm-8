@@ -108,9 +108,14 @@ void buf_flush_note_modification(
 		/*we skip assert for dictionary space
 		temporary fix the bug when use the old format of MySQL 5.7
 		*/
+		//what if we also check for meta pages?
+		ut_ad(block->page.oldest_modification <= start_lsn);
 	}
 	else {
-		ut_ad(block->page.oldest_modification <= start_lsn);
+		if(block->page.oldest_modification > start_lsn) {
+			printf("PMEM_WARN: page oldest lsn > start_lsn (%zu > %zu) space %zu page %zu\n", block->page.oldest_modification, start_lsn, block->page.id.space(), block->page.id.page_no());
+		}
+		//ut_ad(block->page.oldest_modification <= start_lsn);
 	}
 #else //original
     ut_ad(block->page.oldest_modification <= start_lsn);

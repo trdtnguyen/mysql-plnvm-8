@@ -212,15 +212,96 @@ byte *mlog_write_initial_dict_log_record(
     mtr_t *mtr) {
 
   ut_ad(type == MLOG_TABLE_DYNAMIC_META);
+
+/*new impl, copy from mlog_write_initial_log_record_low */
+	byte*		begin_log_ptr;
+	uint16_t	off0;	
+	uint16_t	off1;	
+	uint64_t	key;	
+	//uint64_t	lsn;
+
+	ib_uint32_t n_recs;
+	uint32_t	rec_size;
+	
+	n_recs = mtr->get_n_recs();
+
+	begin_log_ptr = mtr->get_buf();
+	assert(log_ptr >= begin_log_ptr);
+	
+	//save current off	
+	off0 = (log_ptr - begin_log_ptr);
+	mtr->add_off(off0);
+	
+	//compute size for previous log rec	
+
+	if (n_recs > 0){
+		uint16_t prev_off = mtr->get_off_at(n_recs - 1); 
+		uint16_t prev_len_off = mtr->get_len_off_at(n_recs - 1); 
+
+		assert(off0 > prev_off);
+
+		rec_size = off0 - prev_off ;
+		if (rec_size > UINT16_MAX){
+			printf("PMEM_ERROR: rec_size %u is larger than UINT16MAX %u\n", rec_size, UINT16_MAX);
+			assert(0);
+		}
+
+		mach_write_to_2(begin_log_ptr + prev_len_off, rec_size);
+
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+		mtr->add_size_at(rec_size, n_recs - 1);
+#endif
+		//new in DAL (Direct Add Log), add the previous log rec to PPL
+		uint64_t prev_key = mtr->get_key_at(n_recs - 1);
+		uint64_t rec_lsn;
+
+		rec_lsn = mtr->add_rec_to_ppl(prev_key, begin_log_ptr + prev_off, rec_size);
+		mtr->add_LSN_at(rec_lsn, n_recs - 1);
+	}
+	else {
+		//this is the first log rec in the mtr, do nothing
+	}
+	
+	/*Since this part the dict is applied from mlog_write_initial_dict_log_record*/
+
+	mach_write_to_1(log_ptr, type);
+	log_ptr++;
+
+	log_ptr += mach_u64_write_much_compressed(log_ptr, id);
+	log_ptr += mach_u64_write_much_compressed(log_ptr, version);
+	//log_ptr += mach_write_compressed(log_ptr, space_id);
+	//log_ptr += mach_write_compressed(log_ptr, page_no);
+
+	//save offset of "rec_len" field
+	off1 = (log_ptr - begin_log_ptr);
+	mtr->add_len_off(off1);
+
+	/*reserve 2-byte for rec len, we write it later in the next call of this
+	function or at mtr::execute for the last log rec */
+	log_ptr += 2;
+	
+	/*reserve 8-byte for LSN, we write it later when log recs are written to PPL partition log buffer */
+	log_ptr += 8;
+
+	/* compute the key as InnoDB treat id as space_id and version as page_no*/
+	key = (id << 20) + id + version;
+	mtr->add_key(key);
+
+	//add info 
+
+	mtr->added_rec();
+	return(log_ptr);
+
+  /*old impl, just call back mlog_write_initial_log_record_low*/
   /*
 	TODO: check whether type convert (uint64_t -> uint32_t) here causes problem or not
 	*/
-  return (mlog_write_initial_log_record_low(
-				 type,
-				 (space_id_t) id,
-				 (page_no_t) version,
-				 log_ptr,
-				 mtr));
+//  return (mlog_write_initial_log_record_low(
+//				 type,
+//				 (space_id_t) id,
+//				 (page_no_t) version,
+//				 log_ptr,
+//				 mtr));
 }
 
 /*Catenates 1 - 4 bytes to the mtr log. The value is not compressed. */
