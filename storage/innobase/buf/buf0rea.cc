@@ -757,8 +757,8 @@ pm_ppl_buf_read_recv_pages(
 
 		while (buf_pool->n_pend_reads >= recv_n_pool_free_frames / 2) {
 			//tdnguyen test
-			printf("tdnguyen test, Pending reads overload buf_pool->n_pend_reads %zu >= recv_n_pool_free_frames / 2 %zu \n", buf_pool->n_pend_reads, recv_n_pool_free_frames / 2
-					);
+			//printf("tdnguyen test, Pending reads overload buf_pool->n_pend_reads %zu >= recv_n_pool_free_frames / 2 %zu \n",
+			//	   	buf_pool->n_pend_reads, recv_n_pool_free_frames / 2);
 			os_aio_simulated_wake_handler_threads();
 			os_thread_sleep(10000);
 			//os_thread_sleep(1000);

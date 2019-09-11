@@ -87,8 +87,16 @@ bool meb_replay_file_ops = true;
 #include "my_pmemobj.h"
 extern PMEM_WRAPPER* gb_pmw;
 
-//static bool IS_GLOBAL_HASHTABLE = true;
-static bool IS_GLOBAL_HASHTABLE = false;
+static bool IS_GLOBAL_HASHTABLE = false; //benchmark
+//static bool IS_GLOBAL_HASHTABLE = true; //debug
+
+//static bool IS_MULTI_REDO1 = false; //debug
+static bool IS_MULTI_REDO1 = true; //benchmark
+
+
+//static bool IS_MULTI_REDO2 = false; //debug
+static bool IS_MULTI_REDO2 = true; //benchmark
+
 #endif //UNIV_PMEMOBJ_PART_PL and other log-based methods
 
 std::list<space_id_t> recv_encr_ts_list;
@@ -4477,7 +4485,6 @@ pm_ppl_recovery(
      *pm_ppl_analysis() replace old codes until recv_recovery_begin()
      * */
     pm_ppl_analysis(pop, ppl, &global_max_lsn);
-    printf("\nPMEM_REC: ====    ANALYSIS FINISH ====== \n");
 
 	/*Phase 2: REDO
     Simulate recv_recovery_begin() that call recv_read_log_seg()
@@ -4619,6 +4626,7 @@ pm_ppl_analysis(
 	//pm_page_part_log_hash_free(pop, ppl);
 	//pm_page_part_log_hash_create(pop, ppl);
 
+    printf("\nPMEM_REC: ====    ANALYSIS START ====== \n");
     //find low_watermark for each line
 	for (i = 0; i < n; i++) {
 		pline = D_RW(D_RW(ppl->buckets)[i]);
@@ -4728,10 +4736,13 @@ pm_ppl_analysis(
 	//pm_ppl_load_spaces(pop, ppl);
 
 	printf ("ANALYSIS: min_delta %zu bytes max_delta %zu bytes total MB need to parse %f\n", min_delta, max_delta, (total_delta * 1.0 / (1024*1024)));
+
+    printf("\nPMEM_RECV: ====    ANALYSIS FINISHED ====== \n");
 }
 
 /*
  *Start redoer threads to parallelism REDOing
+ REDO PHASE 1: Fetch and Parse log records from WAL file to per-partition hashtable
  * */
 void 
 pm_ppl_redo(
@@ -4743,7 +4754,7 @@ pm_ppl_redo(
 	/*disable is_multi_redo for debugging*/
 
 	//bool is_multi_redo = false;
-	bool is_multi_redo = true;
+	//bool is_multi_redo = true;
 
 	TOID(PMEM_PAGE_LOG_HASHED_LINE) line;
 	PMEM_PAGE_LOG_HASHED_LINE*		pline;
@@ -4752,8 +4763,9 @@ pm_ppl_redo(
 
 	n = ppl->n_buckets;
 
+    printf("\nPMEM_RECV: ====    REDO PHASE1 (PARSE) START ====== \n");
 	/* (0) REDO line by line, only used for debugging */
-	if (!is_multi_redo){	
+	if (!IS_MULTI_REDO1){	
 		for (i = 0; i < n; i++) {
 			pline = D_RW(D_RW(ppl->buckets)[i]);
 
@@ -4765,8 +4777,9 @@ pm_ppl_redo(
 			bool is_err = pm_ppl_redo_line(pop, ppl, pline);
 			assert(!is_err);
 
-			printf("PMEM_RECV: done redoing PHASE 1 line %d\n", pline->hashed_id);
+			printf("PMEM_RECV: REDO PHASE 1 line %d DONE\n", pline->hashed_id);
 		}
+		printf("\nPMEM_RECV: ====    REDO PHASE1 (PARSE) END (SEQUENTIAL REDO)====== \n");
 		return;
 	}
 
@@ -6215,7 +6228,8 @@ pm_ppl_recv_apply_hashed_log_recs(
 		ibool	allow_ibuf)
 {
 	//bool			is_multi_redo = false;	
-	bool			is_multi_redo = true;	
+	//bool			is_multi_redo = true;	
+
 	uint32_t		n, i;
 	uint32_t		begin;
 
@@ -6229,6 +6243,7 @@ pm_ppl_recv_apply_hashed_log_recs(
 
 	n = ppl->n_buckets;
 
+    printf("\nPMEM_RECV: ====    REDO PHASE2 (APPLY) START ====== \n");
 	if (IS_GLOBAL_HASHTABLE) {
 		//test use global hashtable
 		recv_line = ppl->recv_line;
@@ -6244,7 +6259,7 @@ pm_ppl_recv_apply_hashed_log_recs(
 		//end test use global hashtable
 	}
 	
-	if (!is_multi_redo){
+	if (!IS_MULTI_REDO2){
 		/*Sequentially REDO each line (debug only) */
 		ppl->n_redoing_lines = 0;
 		ppl->is_redoing_done = false;
@@ -6271,17 +6286,18 @@ pm_ppl_recv_apply_hashed_log_recs(
 #endif
 			pm_ppl_recv_apply_hashed_line(pop, ppl, pline, pline->recv_line->is_ibuf_avail);
 
+			printf("==> PMEM_RECV REDO PHASE2 line %zu n_cell %zu remains %zu lines DONE\n", pline->hashed_id, pline->recv_line->n_addrs, ppl->n_redoing_lines);
+
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 			printf("===>done Applying line %zu n_cell %zu\n", pline->hashed_id, pline->recv_line->n_addrs);
 #endif
 		}
-		printf("\nPMEM_RECV: ===== wait for all AIO threads finish REDOing...\n");
+		printf("\nPMEM_RECV: ===== wait for all AIO threads finish REDOing PHASE2...\n");
 		while (ppl->n_redoing_lines > 0){
 			os_event_wait(ppl->redoing_done_event);
 		}
-#if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
-		printf("\nPMEM_RECV: ===== Applying completed ======\n");
-#endif
+
+		printf("\nPMEM_RECV: ====    REDO PHASE2 (APPLY) FINISHED ====== \n");
 		return;
 	}
 	

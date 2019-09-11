@@ -521,6 +521,7 @@ struct __pmem_page_part_log {
 	TOID(PMEM_TT) tt; // transaction table	
 
 	bool		is_new;
+
 	/*log area as hash table*/
 	uint64_t			n_buckets; //# of buckets
 	TOID_ARRAY(TOID(PMEM_PAGE_LOG_HASHED_LINE)) buckets;
@@ -626,14 +627,12 @@ struct __pmem_page_log_hashed_line {
 	long long* bit_arr; //bit array to manage free slots
 	uint16_t n_bit_blocks; //number of block in bit_arr
 
-	/*Hash tables*/
-	//hash_table_t* addr_hash; //hash the log block in this line
+	/* DRAM data structures: (1) hashtables and (2) recovery objects.
+	 * */
 	KEY_MAP* key_map; //hash the log block in this line
-	
-
 	OFFSET_MAP* offset_map;
 
-	/*PART 3: recovery*/
+	/*recovery*/
 	//Alternative to recv_sys_t in InnoDB, allocate in DRAM when recovery
 	PMEM_RECV_LINE* recv_line;
 	bool			is_redoing;
@@ -1159,7 +1158,7 @@ PMEM_PAGE_PART_LOG* alloc_pmem_page_part_log(
 		uint64_t		log_buf_size);
 
 void 
-pm_page_part_log_bucket_init(
+pm_ppl_buckets_init(
 		PMEMobjpool*		pop,
 		PMEM_PAGE_PART_LOG*		ppl,
 		uint64_t			n_buckets,
@@ -1168,6 +1167,7 @@ pm_page_part_log_bucket_init(
 		uint64_t			&log_buf_id,
 		uint64_t			&log_buf_offset
 		); 
+
 void 
 pm_ppl_init_in_mem(
 		PMEMobjpool*		pop,
@@ -1313,46 +1313,46 @@ pm_ppl_compute_ckpt_lsn(
 			);
 
 /*Called when a mini-transaction write log record to log buffer in the traditional InnoDB*/
-uint64_t
-pm_ppl_write(
-			PMEMobjpool*		pop,
-			PMEM_PAGE_PART_LOG*	ppl,
-			uint64_t			tid,
-			byte*				log_src,
-			uint64_t			size,
-			uint64_t			n_recs,
-			uint64_t*			key_arr,
-			uint64_t*			size_arr,
-			uint64_t*			ret_start_lsn,
-			uint64_t*			ret_end_lsn,
-			uint64_t			block_id);
+//uint64_t
+//pm_ppl_write(
+//			PMEMobjpool*		pop,
+//			PMEM_PAGE_PART_LOG*	ppl,
+//			uint64_t			tid,
+//			byte*				log_src,
+//			uint64_t			size,
+//			uint64_t			n_recs,
+//			uint64_t*			key_arr,
+//			uint64_t*			size_arr,
+//			uint64_t*			ret_start_lsn,
+//			uint64_t*			ret_end_lsn,
+//			uint64_t			block_id);
 
-void __handle_pm_ppl_write_by_entry(
-			PMEMobjpool*		pop,
-			PMEM_PAGE_PART_LOG*	ppl,
-			uint64_t			tid,
-			byte*				log_src,
-			uint64_t			size,
-			uint64_t			n_recs,
-			uint64_t*			key_arr,
-			uint64_t*			size_arr,
-			//uint64_t*			LSN_arr,
-			uint64_t*			ret_start_lsn,
-			uint64_t*			ret_end_lsn,
-			PMEM_TT_ENTRY*		pe,
-			bool				is_new);
+//void __handle_pm_ppl_write_by_entry(
+//			PMEMobjpool*		pop,
+//			PMEM_PAGE_PART_LOG*	ppl,
+//			uint64_t			tid,
+//			byte*				log_src,
+//			uint64_t			size,
+//			uint64_t			n_recs,
+//			uint64_t*			key_arr,
+//			uint64_t*			size_arr,
+//			//uint64_t*			LSN_arr,
+//			uint64_t*			ret_start_lsn,
+//			uint64_t*			ret_end_lsn,
+//			PMEM_TT_ENTRY*		pe,
+//			bool				is_new);
 
 
-uint64_t
-__update_page_log_block_on_write(
-			PMEMobjpool*		pop,
-			PMEM_PAGE_PART_LOG*	ppl,
-			byte*				log_src,
-			uint64_t			cur_off,
-			uint64_t			rec_size,
-			uint64_t			key,
-			uint64_t*			LSN,
-			uint64_t			bid);
+//uint64_t
+//__update_page_log_block_on_write(
+//			PMEMobjpool*		pop,
+//			PMEM_PAGE_PART_LOG*	ppl,
+//			byte*				log_src,
+//			uint64_t			cur_off,
+//			uint64_t			rec_size,
+//			uint64_t			key,
+//			uint64_t*			LSN,
+//			uint64_t			bid);
 
 PMEM_PAGE_LOG_BLOCK*
 __get_log_block_by_id(
@@ -1360,25 +1360,25 @@ __get_log_block_by_id(
 		PMEM_PAGE_PART_LOG*	ppl,
 		uint64_t			bid);
 
-PMEM_PAGE_LOG_BLOCK*
-pm_ppl_get_log_block_by_key(
-		PMEMobjpool*		pop,
-		PMEM_PAGE_PART_LOG*	ppl,
-		uint64_t			key);
+//PMEM_PAGE_LOG_BLOCK*
+//pm_ppl_get_log_block_by_key(
+//		PMEMobjpool*		pop,
+//		PMEM_PAGE_PART_LOG*	ppl,
+//		uint64_t			key);
 
 /// write log_buf --> full --> assign flusher worker --> handle finish
-void
-__pm_write_log_buf(
-			PMEMobjpool*				pop,
-			PMEM_PAGE_PART_LOG*			ppl,
-			//PMEM_PAGE_LOG_HASHED_LINE*	pline,
-			uint64_t					hashed_id,
-			byte*						log_src,
-			uint64_t					src_off,
-			uint64_t					rec_size,
-			uint64_t*					rec_lsn,
-			PMEM_PAGE_LOG_BLOCK*		plog_block,
-			bool						is_first_write);
+//void
+//__pm_write_log_buf(
+//			PMEMobjpool*				pop,
+//			PMEM_PAGE_PART_LOG*			ppl,
+//			//PMEM_PAGE_LOG_HASHED_LINE*	pline,
+//			uint64_t					hashed_id,
+//			byte*						log_src,
+//			uint64_t					src_off,
+//			uint64_t					rec_size,
+//			uint64_t*					rec_lsn,
+//			PMEM_PAGE_LOG_BLOCK*		plog_block,
+//			bool						is_first_write);
 
 static inline void
 pm_write_log_rec_low(
