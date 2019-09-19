@@ -558,7 +558,7 @@ void buf_flush_insert_into_flush_list(
   ut_ad(log_lsn_validate(lsn));
   ut_ad(block->page.oldest_modification == 0);
   ut_ad(block->page.newest_modification >= lsn);
-#if defined (UNIV_PMEMOBJ_PART_PL)
+#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIPLOG)
   //debug
   /*buf_flush_list_order_validate() check againt recent_closed.tail that is
    * not used in PL-NVM.*/
@@ -568,6 +568,7 @@ void buf_flush_insert_into_flush_list(
 	  if (!check_valid){
 		  buf_page_t* first_page = UT_LIST_GET_FIRST(buf_pool->flush_list);
 		  printf("Error may occur if PL-NVM doesn't skip this check. Check here!\n");
+		  printf("first_page OLSN %zu must <= %zu = start_lsn %zu + %zu\n", first_page->oldest_modification, (lsn + log_buffer_flush_order_lag(*log_sys)), lsn, log_buffer_flush_order_lag(*log_sys));
 	  }
   }
 #else //original
@@ -1910,7 +1911,6 @@ static ulint buf_do_flush_list_batch(buf_pool_t *buf_pool, ulint min_n,
     bool flushed =
 #endif /* UNIV_DEBUG */
         buf_flush_page_and_try_neighbors(bpage, BUF_FLUSH_LIST, min_n, &count);
-
     ut_ad(flushed || buf_pool->flush_hp.is_hp(prev));
 
     --len;
@@ -1973,6 +1973,9 @@ static ulint buf_flush_batch(buf_pool_t *buf_pool, buf_flush_t flush_type,
       break;
     case BUF_FLUSH_LIST:
       count = buf_do_flush_list_batch(buf_pool, min_n, lsn_limit);
+	  //tdnguyen test
+	  //printf("<><> after buf_do_flush_list_batch() min_n %zu lsn_limit %zu count %zu \n",
+	//		  min_n, lsn_limit, count);
       break;
     default:
       ut_error;
@@ -2415,10 +2418,14 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
     /* First time around. */
     prev_lsn = cur_lsn;
     prev_time = ut_time();
+	//tdnguyen test
+	//printf("\t==> page_cleaner_flush_pages_recommendation() return 0 CASE 1 prev_lsn = 0 cur_lsn = %zu \n", cur_lsn);
     return (0);
   }
 
   if (prev_lsn == cur_lsn) {
+	//tdnguyen test
+	//printf("\t==> page_cleaner_flush_pages_recommendation() return 0 CASE 2 prev_lsn == cur_lsn = %zu \n", cur_lsn);
     return (0);
   }
 
@@ -3078,7 +3085,12 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
     and there is work to do. */
     if (srv_check_activity(last_activity) || buf_get_n_pending_read_ios() ||
         n_flushed == 0) {
+
       ret_sleep = pc_sleep_if_needed(next_loop_time, sig_count);
+
+	  //tdnguyen test
+	  //printf("||==> CLEANER COORDINATE [thread]: wakeup last_activity %zu ret_sleep = %zu pending_IOs = %zu n_flushed=%zu buf_flush_sync_lsn = %zu srv_flush_sync = %d \n",
+		//	 last_activity, ret_sleep, buf_get_n_pending_read_ios(), n_flushed, buf_flush_sync_lsn, srv_flush_sync);
 
       if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
         break;
@@ -3131,7 +3143,9 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       lsn_t lsn_limit = buf_flush_sync_lsn;
       buf_flush_sync_lsn = 0;
       mutex_exit(&page_cleaner->mutex);
-
+	  
+	  //tdnguyen test
+	  //printf("BEGIN CASE 1 pc_request n_to_flush MAX, lsn_limit = %zu \n", lsn_limit);
       /* Request flushing for threads */
       pc_request(ULINT_MAX, lsn_limit);
 
@@ -3151,6 +3165,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       ulint n_flushed_list = 0;
       pc_wait_finished(&n_flushed_lru, &n_flushed_list);
 
+
       if (n_flushed_list > 0 || n_flushed_lru > 0) {
         buf_flush_stats(n_flushed_list, n_flushed_lru);
 
@@ -3160,6 +3175,8 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       }
 
       n_flushed = n_flushed_lru + n_flushed_list;
+
+	  //printf("END CASE 1 pc_request lsn_limit = %zu n_flushed = %zu\n", lsn_limit, n_flushed);
 
     } else if (srv_check_activity(last_activity)) {
       ulint n_to_flush;
@@ -3173,6 +3190,8 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       } else {
         n_to_flush = 0;
       }
+	  //tdnguyen test
+	  //printf("BEGIN CASE 2 pc_request n_to_flush = %zu lsn_limit = %zu \n", n_to_flush, lsn_limit);
 
       /* Request flushing for threads */
       pc_request(n_to_flush, lsn_limit);
@@ -3207,6 +3226,8 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       n_flushed_last += n_flushed_list;
 
       n_flushed = n_flushed_lru + n_flushed_list;
+	  //tdnguyen test
+	  //printf("END CASE 2 pc_request lsn_limit = %zu n_flushed %zu \n", lsn_limit, n_flushed);
 
       if (n_flushed_lru) {
         MONITOR_INC_VALUE_CUMULATIVE(
@@ -3221,6 +3242,8 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       }
 
     } else if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+	  //tdnguyen test
+	  //printf("\n ==== > CLEANER COORDINATE [thread]: CASE 3 call buf_flush_lists()\n");
       /* no activity, slept enough */
       buf_flush_lists(PCT_IO(100), LSN_MAX, &n_flushed);
 
@@ -3960,20 +3983,19 @@ void pm_log_redoer_worker() {
 
 	my_thread_init();
 
-	mutex_enter(&redoer->mutex);
-	idx = redoer->n_workers;
-	redoer->n_workers++;
-	os_event_reset(redoer->is_log_all_closed);
-	mutex_exit(&redoer->mutex);
+	//thread_id = syscall(SYS_gettid);
+	//idx = thread_id % srv_ppl_n_redoer_threads;
 	
 	//thread_id = os_thread_pf(os_thread_get_curr_id());
 	//lines_per_thread = redoer->size / (srv_ppl_n_redoer_threads - 1);
 	lines_per_thread = (redoer->size - 1) / srv_ppl_n_redoer_threads + 1;
 
-	//thread_id = syscall(SYS_gettid);
-	//idx = thread_id % srv_ppl_n_redoer_threads;
-
+	mutex_enter(&redoer->mutex);
+	idx = redoer->n_workers;
+	redoer->n_workers++;
+	os_event_reset(redoer->is_log_all_closed);
 	printf("Redoers thread %zu lines_per_thread %zu created \n",idx, lines_per_thread);
+	mutex_exit(&redoer->mutex);
 
 	while (true) {
 		//worker thread wait until there is is_requested signal 
@@ -4054,6 +4076,8 @@ retry:
 				mutex_exit(&redoer->mutex);
 		} //end for
 
+		printf("==> Redoers phase %zu thread %zu FINISHED redoer->n_worker %zu redoer->n_remains %zu ppl->n_redoing_lines %zu\n",
+			   	redoer->phase, idx, redoer->n_workers, redoer->n_remains, gb_pmw->ppl->n_redoing_lines);
 		// after this for loop, all lines are either done REDO or REDOing by other threads, this thread has nothing to do
 		break;
 	} //end while thread

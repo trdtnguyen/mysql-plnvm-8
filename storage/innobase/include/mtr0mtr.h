@@ -502,8 +502,9 @@ struct mtr_t {
 
   /* 
    * check and extend current buf if it is not fit with size
-   * This funciton does not change the current offset
-   * Reallocation may cause a bug if a old pointer still point to the odd address
+   * This functiton does not change the current offset
+   * Reallocation may cause a bug if there is another pointer points to the old 
+   * address before reallocate. You should check the caller of this function carefully.
    *
    * return the pointer to the end of extended buf*/
   byte* open_buf(uint32_t size){
@@ -512,13 +513,16 @@ struct mtr_t {
 	  byte* new_ptr;
 
 	  cur_max_size = m_impl.max_buf_size;
-	  if (m_impl.cur_off + size > cur_max_size){
 
+	  /*extend the mtr's buffer*/
+	  if (m_impl.cur_off + size >= cur_max_size)
+	  {
 		  new_size = ((size / cur_max_size) + 2) * cur_max_size;
 		  new_ptr = (byte*) realloc(m_impl.buf, new_size);
-		  //if (m_impl.buf != new_ptr){
-		  //	printf("mtr::open_buf() reallocate from %zu to %zu\n", m_impl.buf, new_ptr);
-		  //}
+
+		//  printf("reallocate in open_buf() request_size %zu before_size = %zu, after_size = %zu , before buf = %zu after buf = %zu\n",
+		//		  size, cur_max_size, new_size, m_impl.buf, new_ptr);
+
 		  m_impl.buf = new_ptr;
 
 		  m_impl.max_buf_size = new_size;

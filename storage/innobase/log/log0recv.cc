@@ -4727,6 +4727,7 @@ pm_ppl_analysis(
 			max_delta = delta;
 
 		total_delta += delta;
+		printf ("ANALYSIS: pline %zu need to REDO %zu bytes\n", pline->hashed_id, delta);
 #if defined (UNIV_PMEMOBJ_PART_PL_DEBUG)
 		printf ("ANALYSIS: pline %zu need to REDO %zu bytes\n", pline->hashed_id, delta);
 #endif
@@ -5394,7 +5395,12 @@ pm_ppl_recv_parse_log_rec(
 	  new_ptr += 8;
 
       if (new_ptr != nullptr) {
-        new_ptr = recv_line->metadata_recover->parseMetadataLog(
+		/*parse the metadata and store the result in recv_sys
+		 * Don't use per-line metadata_recover here*/
+
+        //new_ptr = recv_line->metadata_recover->parseMetadataLog(
+        //    id, version, new_ptr, end_ptr);
+        new_ptr = recv_sys->metadata_recover->parseMetadataLog(
             id, version, new_ptr, end_ptr);
       }
 

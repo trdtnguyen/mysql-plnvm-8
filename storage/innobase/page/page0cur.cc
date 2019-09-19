@@ -1024,27 +1024,27 @@ static void page_cur_insert_rec_write_log(
 
   rec_size -= i;
 
-  if (log_ptr + rec_size <= log_end) {
-    memcpy(log_ptr, ins_ptr, rec_size);
-    mlog_close(mtr, log_ptr + rec_size);
-  } else {
 #if defined (UNIV_PMEMOBJ_PART_PL)
 		/*In PPL, we implemnt our own dyn_buf in mtr.
-		 * We don't rely on the log_end here*/
+		 * We don't rely on the log_end here
+		 * So we mlog_close(), mlog_open() (may realloc), memcpy() and mlog_close()
+		 * regardless of log_end
+		 * */
 		mlog_close(mtr, log_ptr);
 		ut_a(rec_size < UNIV_PAGE_SIZE);
 		log_ptr = mlog_open(mtr, rec_size);
 		memcpy(log_ptr, ins_ptr, rec_size);
 		mlog_close(mtr, log_ptr + rec_size);
-		//this case may cause bug, check	
-		//printf("~~~ WARN: check line 1145 page0cur.cc\n");
-		//assert(0);//debug
 #else //original
+  if (log_ptr + rec_size <= log_end) {
+    memcpy(log_ptr, ins_ptr, rec_size);
+    mlog_close(mtr, log_ptr + rec_size);
+  } else {
     mlog_close(mtr, log_ptr);
     ut_a(rec_size < UNIV_PAGE_SIZE);
     mlog_catenate_string(mtr, ins_ptr, rec_size);
-#endif //UNIV_PMEMOBJ_PART_PL
   }
+#endif //UNIV_PMEMOBJ_PART_PL
 }
 #else /* !UNIV_HOTBACKUP */
 #define page_cur_insert_rec_write_log(ins_rec, size, cur, index, mtr) ((void)0)

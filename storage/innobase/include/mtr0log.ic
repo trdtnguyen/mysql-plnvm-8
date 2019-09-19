@@ -85,10 +85,15 @@ mlog_close(
 
 	uint32_t new_off = ptr - begin_ptr;
 	
-	ut_ad(new_off < mtr->get_max_buf_size());
+	//ut_ad(new_off < mtr->get_max_buf_size());
+	if (new_off >= mtr->get_max_buf_size()){
+		printf("PMEM_ERROR in mlog_close() new_off %zu >= max_buf %zu\n", new_off, mtr->get_max_buf_size());
+		assert(new_off < mtr->get_max_buf_size());
+	}
 	
 	//we only increase the offset in mlog_close()
-	ut_ad(mtr->get_cur_off() <= new_off);
+	//ut_ad(mtr->get_cur_off() <= new_off);
+	assert(mtr->get_cur_off() <= new_off);
 
 	mtr->set_cur_off(new_off);
 }
@@ -288,6 +293,11 @@ byte *mlog_write_initial_dict_log_record(
 	mtr->add_key(key);
 
 	//add info 
+#if defined (UNIV_PMEMOBJ_VALID_MTR)	
+	mtr->add_type(type);
+	mtr->add_space(id);
+	mtr->add_page(version);
+#endif
 
 	mtr->added_rec();
 	return(log_ptr);

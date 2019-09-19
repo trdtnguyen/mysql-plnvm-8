@@ -474,6 +474,13 @@ void mtr_t::start(bool sync, bool read_only) {
   //ulint max_init_size = 16384;	
   //ulint max_init_size = 8192;	//debug OK
   //ulint max_init_size = 4096;	
+  
+  /*Note for Linkbench
+   * Linkbench use large data record that leads to large REDO log record.
+   * The heap buffer of mini-transaction will be filled up quickly.
+   * Thus we should init a large buffer at the first time to avoid realloc
+   * */
+  //ulint max_init_size = 2048;	// for Linkbench
   //ulint max_init_size = 1024;	// for Linkbench
   ulint max_init_size = 512;	// original value
 
@@ -704,7 +711,8 @@ mtr_t::pmem_check_mtrlog(mtr_t* mtr)
 	ulint check_lsn;
 
 	ulint n_parsed;
-	ulint space_no, page_no;
+	//ulint space_no, page_no;
+	uint32_t space_no, page_no;
 	byte* body;
 
 	ulint check_space, check_page;
@@ -920,6 +928,53 @@ void mtr_t::Command::execute() {
   /*release resources*/
   release_all();
   release_resources();
+}
+#elif defined (UNIV_SKIPLOG)
+/* Skip writing log records from mtr's heap to log buffer
+ * Release mtr's in-memory resources
+ * */
+void mtr_t::Command::execute() {
+	ut_ad(m_impl->m_log_mode != MTR_LOG_NONE);
+	
+	ulint len;
+	len = prepare_write();
+
+	if (len > 0) {
+		/*simulate log_buffer_reserve
+		 *Objective: update log_sys->sn and corresponding values
+		 * */
+		Log_handle handle;
+		log_t &log = *log_sys;
+
+		//const sn_t start_sn = log_sys->sn.fetch_add(len);
+		//const sn_t end_sn = start_sn + len;
+
+		//handle.lock_no = log_buffer_s_lock_enter(*log_sys);
+
+		//handle.start_lsn = log_translate_sn_to_lsn(start_sn);
+		//handle.end_lsn = log_translate_sn_to_lsn(end_sn);
+
+		handle.start_lsn = ut_time_us(NULL);
+		handle.end_lsn = handle.start_lsn + len;
+
+		add_dirty_blocks_to_flush_list(handle.start_lsn, handle.end_lsn);
+
+		/*simulate log_buffer_close*/
+		//std::atomic_thread_fence(std::memory_order_release);
+		//log_sys->recent_closed.add_link(handle.start_lsn, handle.end_lsn);
+
+		//log_buffer_s_lock_exit(*log_sys, handle.lock_no);
+
+		m_impl->m_mtr->m_commit_lsn = handle.end_lsn;
+	} else {
+		DEBUG_SYNC_C("mtr_noredo_before_add_dirty_blocks");
+
+		add_dirty_blocks_to_flush_list(0, 0);
+	}
+
+	release_all();
+	release_resources();
+
 }
 #else //original
 

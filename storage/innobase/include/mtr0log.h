@@ -230,7 +230,10 @@ byte *mlog_parse_index(byte *ptr,           /*!< in: buffer */
 /** Insert, update, and maybe other functions may use this value to define an
 extra mlog buffer size for variable size data */
 #if defined (UNIV_PMEMOBJ_PART_PL)
-/*we need to increase this value for Linkbench*/
+/*we need to increase this value for Linkbench
+ *See page_cur_insert_rec_write_log() for more detail
+ * */
+//#define MLOG_BUF_MARGIN	1024
 #define MLOG_BUF_MARGIN	512
 #else //original
 #define MLOG_BUF_MARGIN	256

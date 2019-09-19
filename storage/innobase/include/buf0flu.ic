@@ -115,7 +115,7 @@ void buf_flush_note_modification(
 		if(block->page.oldest_modification > start_lsn) {
 			printf("PMEM_WARN: page oldest lsn > start_lsn (%zu > %zu) space %zu page %zu\n", block->page.oldest_modification, start_lsn, block->page.id.space(), block->page.id.page_no());
 			//try to does the assign
-			block->page.oldest_modification = start_lsn;
+			//block->page.oldest_modification = start_lsn;
 		}
 		//ut_ad(block->page.oldest_modification <= start_lsn);
 	}

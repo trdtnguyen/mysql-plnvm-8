@@ -160,6 +160,11 @@ const char *buf_checksum_algorithm_name(
                                 perform lsn check
 @param[in]	read_buf	buffer containing the page. */
 inline void buf_page_lsn_check(bool check_lsn, const byte *read_buf) {
+#if defined (UNIV_SKIPLOG)
+	/*SKIPLOG doesn't check lsn*/
+	return;
+#endif
+
 #if !defined(UNIV_HOTBACKUP) && !defined(UNIV_LIBRARY)
   if (check_lsn && recv_lsn_checks_on) {
     lsn_t current_lsn;

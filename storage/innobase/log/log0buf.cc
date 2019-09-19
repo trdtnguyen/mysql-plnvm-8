@@ -640,6 +640,8 @@ void log_free_check_wait(log_t &log, sn_t sn) {
     const lsn_t checkpoint_lsn = log.last_checkpoint_lsn.load();
 
     if (start_lsn <= checkpoint_lsn + log.lsn_capacity_for_free_check) {
+	   //printf("[][] log_free_check_wait() return TRUE sn %zu + margins %zu = start_lsn %zu <= %zu = ckpt_lsn %zu + %zu \n",
+		//	sn, margins, start_lsn, checkpoint_lsn + log.lsn_capacity_for_free_check, checkpoint_lsn, log.lsn_capacity_for_free_check);
       /* No reason to wait anymore. */
       return (true);
     }
@@ -647,7 +649,11 @@ void log_free_check_wait(log_t &log, sn_t sn) {
     log_request_checkpoint(log, true,
                            start_lsn - log.lsn_capacity_for_free_check);
 
-    return (false);
+	//tdnguyen test
+	//printf("<><> log_free_check_wait() return FALSE sn %zu + margins %zu = start_lsn %zu > %zu = ckpt_lsn %zu + %zu \n",
+	//		sn, margins, start_lsn, checkpoint_lsn + log.lsn_capacity_for_free_check, checkpoint_lsn, log.lsn_capacity_for_free_check);
+
+	return (false);
   };
 
   const auto wait_stats = ut_wait_for(0, 100, stop_condition);

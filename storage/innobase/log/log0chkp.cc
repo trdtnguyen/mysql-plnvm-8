@@ -519,7 +519,7 @@ static void log_checkpoint(log_t &log) {
   }
 
   ut_a(checkpoint_lsn >= log.last_checkpoint_lsn.load());
-
+ 
   ut_a(checkpoint_lsn <= log_buffer_dirty_pages_added_up_to_lsn(log));
 
 #ifdef UNIV_DEBUG
@@ -670,6 +670,9 @@ static void log_request_checkpoint_low(log_t &log, lsn_t requested_lsn) {
   ut_a(requested_lsn % OS_FILE_LOG_BLOCK_SIZE <
        OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE);
 
+  //tdnguyen test
+  //printf("|||=> in log_request_checkpoint_low req %zu last ckpt_lsn %zu last req_ckpt_lsn %zu \n", requested_lsn, log.last_checkpoint_lsn.load(), log.requested_checkpoint_lsn);	
+
   requested_lsn = std::max(requested_lsn, log.last_checkpoint_lsn.load());
 
   /* Update log.requested_checkpoint_lsn only to greater value. */
@@ -677,6 +680,8 @@ static void log_request_checkpoint_low(log_t &log, lsn_t requested_lsn) {
   if (requested_lsn > log.requested_checkpoint_lsn) {
     log.requested_checkpoint_lsn = requested_lsn;
 
+	//tdnguyen test
+	//printf("|||=> in log_request_checkpoint_low set log.requested_checkpoint_lsn to %zu \n", requested_lsn);	
     os_event_set(log.checkpointer_event);
   }
 }
@@ -773,6 +778,8 @@ static void log_preflush_pool_modified_pages(const log_t &log,
     /* Wake up page cleaner asking to perform sync flush
     (unless user explicitly disabled sync-flushes). */
     if (srv_flush_sync) {
+	  //tdnguyen test
+	  //printf("log_freflush_pool_modified_pages() call buf_flush_request_force with new_oldest %zu\n", new_oldest);
       buf_flush_request_force(new_oldest);
     }
   }
@@ -812,6 +819,10 @@ static bool log_consider_sync_flush(log_t &log) {
 
   if (flush_up_to > oldest_lsn) {
     log_checkpointer_mutex_exit(log);
+
+	//tdnguyen test
+	//printf("in log_consider_sync_flush() call log_preflush flush_up_to %zu A_CLSN %zu R_CLSN %zu cur_lsn %zu \n", 
+	//		flush_up_to, oldest_lsn, requested_checkpoint_lsn, current_lsn);
 
     log_preflush_pool_modified_pages(log, flush_up_to);
 
@@ -950,13 +961,64 @@ void log_checkpointer(log_t *log_ptr) {
 
   while (true) {
     auto do_some_work = [&log] {
-#if defined (UNIV_PMEMOBJ_PART_PL) || defined (UNIV_SKIP_LOG)
+#if defined (UNIV_PMEMOBJ_PART_PL)
 		/*PL-NVM uses its own checkpoint mechanism. 
-		 * Thus this lambda function always returns false*/
+		 * if we do actual checkpoint, return true
+		 * otherwise: return false. In this case, the caller will sleep 
+		 * until the log.checkpoint_event is trigger or reaching a time threshold 
+		 * */
+		if (gb_pmw->ppl->max_req_ckpt_lsn > gb_pmw->ppl->ckpt_lsn) {
+			/*In MySQL 8.0, we call checkpoint in log_checkpointer
+			 * thread instead of master thread as in MySQL 5.7*/
+			pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);
 
-		//TODO: we may update some lsns for the checkpoint work, will find out when debugging
-		return false; //do nothing
-#else //original
+			return true;
+		}
+		return false;
+#elif defined (UNIV_SKIPLOG)
+		/*SKIPLOG has its own checkpoint mechanism
+		 * Simulate log_consider_sync_flush() with some modifies
+		 * */
+		return false;
+
+		lsn_t oldest_lsn = log.available_for_checkpoint_lsn;
+		lsn_t current_lsn = log_get_lsn(log);
+
+		lsn_t flush_up_to = oldest_lsn;
+
+		if (current_lsn == oldest_lsn) {
+			return (false);
+		}
+
+		if (current_lsn - oldest_lsn > log.max_modified_age_sync) {
+			ut_a(current_lsn > log.max_modified_age_sync);
+
+			flush_up_to = current_lsn - log.max_modified_age_sync;
+		}
+
+		const lsn_t requested_checkpoint_lsn = log.requested_checkpoint_lsn;
+
+		if (requested_checkpoint_lsn > flush_up_to) {
+			flush_up_to = requested_checkpoint_lsn;
+		}
+
+		if (flush_up_to > oldest_lsn) {
+			log_checkpointer_mutex_exit(log);
+
+			printf("LOG_CHECKPOINTER[thread]: call buf_flush_request_force() flush_up_to %zu A_CLSN %zu R_CLSN %zu cur_lsn %zu \n", 
+			flush_up_to, oldest_lsn, requested_checkpoint_lsn, current_lsn);
+
+			buf_flush_request_force(flush_up_to);
+
+			log_checkpointer_mutex_enter(log);
+
+			log.available_for_checkpoint_lsn = flush_up_to;
+
+			return (true);
+		}
+
+		return (false);
+#else //original or UNIV_SKIPLOG
       ut_ad(log_checkpointer_mutex_own(log));
 
       /* We will base our next decisions on maximum lsn
@@ -985,31 +1047,13 @@ void log_checkpointer(log_t *log_ptr) {
     const auto sig_count = os_event_reset(log.checkpointer_event);
 
     if (!do_some_work()) {
-#if defined (UNIV_PMEMOBJ_PART_PL)
-	  if (gb_pmw->ppl->max_req_ckpt_lsn > gb_pmw->ppl->ckpt_lsn) {
-		  /*In MySQL 8.0, we call checkpoint in log_checkpointer
-		   * thread instead of master thread as in MySQL 5.7*/
-		  pm_ppl_checkpoint(gb_pmw->pop, gb_pmw->ppl);
-	  }
 
-      log_checkpointer_mutex_exit(log);
-	  /*checkpoint interval in ms, 10ms is default*/
-      //os_event_wait_time_low(log.checkpointer_event, 3000 * 1000, sig_count);
-      os_event_wait_time_low(log.checkpointer_event, 10 * 1000, sig_count);
-
-      log_checkpointer_mutex_enter(log);
-#else //original
-
-#if defined (UNIV_SKIP_LOG)
-	  /*simply do nothing here, i.e., wait for 10ms then check again*/
-#endif //UNIV_SKIP_LOG
       log_checkpointer_mutex_exit(log);
 
       os_event_wait_time_low(log.checkpointer_event, 10 * 1000, sig_count);
 
       log_checkpointer_mutex_enter(log);
 
-#endif //UNIV_PMEMOBJ_PART_PL
     } else {
       log_checkpointer_mutex_exit(log);
 
