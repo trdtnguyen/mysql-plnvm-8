@@ -161,7 +161,9 @@ const char *buf_checksum_algorithm_name(
 @param[in]	read_buf	buffer containing the page. */
 inline void buf_page_lsn_check(bool check_lsn, const byte *read_buf) {
 #if defined (UNIV_SKIPLOG)
-	/*SKIPLOG doesn't check lsn*/
+	/*SKIPLOG doesn't check lsn
+	 * skip popup warning messages
+	 * */
 	return;
 #endif
 

@@ -976,49 +976,12 @@ void log_checkpointer(log_t *log_ptr) {
 		}
 		return false;
 #elif defined (UNIV_SKIPLOG)
-		/*SKIPLOG has its own checkpoint mechanism
-		 * Simulate log_consider_sync_flush() with some modifies
+		/*SKIPLOG skip checkpoint and let dirty pages 
+		 * flushed when the buffer pool is nearly full
 		 * */
 		return false;
 
-		lsn_t oldest_lsn = log.available_for_checkpoint_lsn;
-		lsn_t current_lsn = log_get_lsn(log);
-
-		lsn_t flush_up_to = oldest_lsn;
-
-		if (current_lsn == oldest_lsn) {
-			return (false);
-		}
-
-		if (current_lsn - oldest_lsn > log.max_modified_age_sync) {
-			ut_a(current_lsn > log.max_modified_age_sync);
-
-			flush_up_to = current_lsn - log.max_modified_age_sync;
-		}
-
-		const lsn_t requested_checkpoint_lsn = log.requested_checkpoint_lsn;
-
-		if (requested_checkpoint_lsn > flush_up_to) {
-			flush_up_to = requested_checkpoint_lsn;
-		}
-
-		if (flush_up_to > oldest_lsn) {
-			log_checkpointer_mutex_exit(log);
-
-			printf("LOG_CHECKPOINTER[thread]: call buf_flush_request_force() flush_up_to %zu A_CLSN %zu R_CLSN %zu cur_lsn %zu \n", 
-			flush_up_to, oldest_lsn, requested_checkpoint_lsn, current_lsn);
-
-			buf_flush_request_force(flush_up_to);
-
-			log_checkpointer_mutex_enter(log);
-
-			log.available_for_checkpoint_lsn = flush_up_to;
-
-			return (true);
-		}
-
-		return (false);
-#else //original or UNIV_SKIPLOG
+#else //original
       ut_ad(log_checkpointer_mutex_own(log));
 
       /* We will base our next decisions on maximum lsn

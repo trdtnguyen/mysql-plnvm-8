@@ -940,30 +940,17 @@ void mtr_t::Command::execute() {
 	len = prepare_write();
 
 	if (len > 0) {
-		/*simulate log_buffer_reserve
-		 *Objective: update log_sys->sn and corresponding values
+		/*
+		 * use timestamp as the current lsn
+		 * lsns are need for add_dirty_blocks_to_flush_list() work
 		 * */
 		Log_handle handle;
 		log_t &log = *log_sys;
-
-		//const sn_t start_sn = log_sys->sn.fetch_add(len);
-		//const sn_t end_sn = start_sn + len;
-
-		//handle.lock_no = log_buffer_s_lock_enter(*log_sys);
-
-		//handle.start_lsn = log_translate_sn_to_lsn(start_sn);
-		//handle.end_lsn = log_translate_sn_to_lsn(end_sn);
 
 		handle.start_lsn = ut_time_us(NULL);
 		handle.end_lsn = handle.start_lsn + len;
 
 		add_dirty_blocks_to_flush_list(handle.start_lsn, handle.end_lsn);
-
-		/*simulate log_buffer_close*/
-		//std::atomic_thread_fence(std::memory_order_release);
-		//log_sys->recent_closed.add_link(handle.start_lsn, handle.end_lsn);
-
-		//log_buffer_s_lock_exit(*log_sys, handle.lock_no);
 
 		m_impl->m_mtr->m_commit_lsn = handle.end_lsn;
 	} else {
