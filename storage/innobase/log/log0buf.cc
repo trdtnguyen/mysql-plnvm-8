@@ -46,6 +46,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 #include "log0recv.h"  /* recv_recovery_is_on() */
 #include "srv0start.h" /* SRV_SHUTDOWN_FLUSH_PHASE */
 
+#if defined (UNIV_PMEMOBJ_WAL)
+#include "my_pmemobj.h"
+extern PMEM_WRAPPER* gb_pmw;
+#endif // UNIV_PMEMOBJ_WAL
+
 /**************************************************/ /**
  @page PAGE_INNODB_REDO_LOG_BUF Redo log buffer
 
@@ -831,7 +836,11 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
 
     /* This is the critical memcpy operation, which copies data
     from internal mtr's buffer to the shared log buffer. */
+#if defined (UNIV_PMEMOBJ_WAL)
+	pmemobj_memcpy_persist(gb_pmw->pop, ptr, str, len);
+#else //original
     std::memcpy(ptr, str, len);
+#endif // UNIV_PMEMOBJ_WAL
 
     ut_a(len <= str_len);
 

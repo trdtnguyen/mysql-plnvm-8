@@ -997,8 +997,13 @@ bool log_buffer_resize_low(log_t &log, size_t new_size, lsn_t end_lsn) {
 
   /* Restore the contents. */
   for (auto i = start_lsn; i < end_lsn; i += OS_FILE_LOG_BLOCK_SIZE) {
+#if defined (UNIV_PMEMOBJ_WAL)
+    pmemobj_memcpy_persist(gb_pmw->pop, &log.buf[i % new_size], &tmp_buf[i - start_lsn],
+                OS_FILE_LOG_BLOCK_SIZE);
+#else //original
     std::memcpy(&log.buf[i % new_size], &tmp_buf[i - start_lsn],
                 OS_FILE_LOG_BLOCK_SIZE);
+#endif // UNIV_PMEMOBJ_WAL
   }
   UT_DELETE_ARRAY(tmp_buf);
 
@@ -1078,6 +1083,31 @@ static void log_allocate_buffer(log_t &log) {
   ut_a(srv_log_buffer_size >= 4 * UNIV_PAGE_SIZE);
 
   log.buf.create(srv_log_buffer_size);
+
+#if defined (UNIV_PMEMOBJ_WAL)
+    byte* p;
+	//allocate the log buffer in persistent memory
+	if (!gb_pmw->plogbuf){
+		if ( pm_wrapper_logbuf_alloc(gb_pmw, srv_log_buffer_size)
+				== PMEM_ERROR) {
+			printf("PMEMOBJ_ERROR: error when allocate log buffer in log_init()\n");
+		}
+		//The server is previously shutdown normally. We assign the log buffer now
+		p = static_cast<byte*> (pm_wrapper_logbuf_get_logdata(gb_pmw));
+	}
+	else {
+		printf("!!!!!!! [PMEMOBJ_INFO]: the server restart from a crash but the log buffer is persist, in pmem: size = %zd lsn = %"PRIu64" \n", 
+				gb_pmw->plogbuf->size, gb_pmw->plogbuf->lsn);
+		/*The server is crash and does not shutdown normally
+		 * our log buffer in pmem has some log records that have not sync to log files
+		 * temporary log_sys->buf_ptr use allocated heap from DRAM
+		 * we will assign it to our pmem heap later in recv_recovery_from_checkpoint_start()
+		 * */
+		p = static_cast<byte*> (pm_wrapper_logbuf_get_logdata(gb_pmw));
+	}
+	log.buf.assign(p);
+
+#endif //UNIV_PMEMOBJ_WAL
 }
 
 static void log_deallocate_buffer(log_t &log) { log.buf.destroy(); }

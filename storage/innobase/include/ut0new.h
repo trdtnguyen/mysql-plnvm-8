@@ -1162,6 +1162,19 @@ class aligned_memory {
     ut_a(m_object != nullptr);
     return m_object;
   }
+#if defined (UNIV_PMEMOBJ_WAL)
+ /*asign m_object to another memroy location
+  *The caller response for allocated the memory p pointed to
+  * */
+  virtual T_Type* assign(void* p) {
+	  /*free the old memory location*/
+	  free_memory();
+	  m_memory = p;
+	  m_object = static_cast<T_Type *>(::ut_align(m_memory, T_Align_to));
+
+	  return m_object;
+  }
+#endif //UNIV_PMEMOBJ_WAL
 
  protected:
   /** Checks if no object is currently being managed. */

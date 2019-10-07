@@ -2279,6 +2279,10 @@ dberr_t trx_commit_for_mysql(trx_t *trx) /*!< in/out: transaction */
  with trx->flush_log_later == TRUE. */
 void trx_commit_complete_for_mysql(trx_t *trx) /*!< in/out: transaction */
 {
+#if defined (UNIV_PMEMOBJ_WAL)
+	/*UNIV_PMEMOBJ_WAL skip flushing REDO logs at transaction commit*/
+	return;
+#endif
   if (trx->id != 0 || !trx->must_flush_log_later ||
       (thd_requested_durability(trx->mysql_thd) == HA_IGNORE_DURABILITY &&
        !trx->ddl_must_flush)) {
