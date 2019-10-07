@@ -957,6 +957,10 @@ pm_ppl_buckets_init(
 
 	ppl->pmem_page_log_size = sizeof(TOID(PMEM_PAGE_LOG_HASHED_LINE)) * n;
 
+#if defined(UNIV_PMEMOBJ_PPL_STAT)
+	ppl->log_ckpt_lock_wait_time = 0;
+	ppl->n_log_ckpt = 0;
+#endif
 	/*for each hashed line*/
 	for (i = 0; i < n; i++) {
 		POBJ_ZNEW(pop,
@@ -1778,6 +1782,7 @@ retry:
 	plogbuf = D_RW(pline->logbuf);
 	
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
+	/*we start tracking the wait time for pline->lock*/
 	start_time = ut_time_us(NULL);
 #endif	
 	/*WARNING this lock may become bottle neck*/
@@ -3073,17 +3078,14 @@ __print_lock_overhead(FILE* f,
 
 	for (i = 0; i < n; i++) {
 		pline = D_RW(D_RW(ppl->buckets)[i]);
-
 		if (pline->log_write_lock_wait_time > max_log_write_lock_wait_time){
 			max_log_write_lock_wait_time = pline->log_write_lock_wait_time;
 		}
-
 	    avg_log_write_lock_wait_time += pline->log_write_lock_wait_time * 1.0 / pline->n_log_write;
 
 		if (pline->log_flush_lock_wait_time > max_log_flush_lock_wait_time){
 			max_log_flush_lock_wait_time = pline->log_flush_lock_wait_time;
 		}
-		
 	    avg_log_flush_lock_wait_time += pline->log_flush_lock_wait_time * 1.0 / pline->n_log_flush;
 
 	} //end for
@@ -3091,12 +3093,15 @@ __print_lock_overhead(FILE* f,
 	avg_log_write_lock_wait_time = avg_log_write_lock_wait_time / n;
 	avg_log_flush_lock_wait_time = avg_log_flush_lock_wait_time / n;
 
-	fprintf(f, "max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %f \t %zu \t %f\n", 
+	fprintf(f, "log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+			ppl->log_ckpt_lock_wait_time,
 			max_log_write_lock_wait_time,
 			avg_log_write_lock_wait_time,
 			max_log_flush_lock_wait_time,
 			avg_log_flush_lock_wait_time);
-	printf("max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %f \t %zu \t %f\n", 
+
+	printf("log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+			ppl->log_ckpt_lock_wait_time,
 			max_log_write_lock_wait_time,
 			avg_log_write_lock_wait_time,
 			max_log_flush_lock_wait_time,

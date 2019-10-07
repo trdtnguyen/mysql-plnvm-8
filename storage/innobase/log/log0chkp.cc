@@ -570,6 +570,11 @@ pm_ppl_checkpoint(
 	lsn_t		max_oldest;
 	PMEM_PAGE_LOG_HASHED_LINE* pline;
 
+#if defined(UNIV_PMEMOBJ_PPL_STAT)
+	uint64_t start_time, end_time;
+	uint64_t t1, t2;
+#endif	
+
 	//(1) Compute the real checkpoint lsn
 	n = ppl->n_buckets;
 	min_oldest = ULONG_MAX;
@@ -595,7 +600,18 @@ pm_ppl_checkpoint(
 	//buf_flush_wait_flushed(req_ckpt_lsn);
 
 	/* (5) update the global ckpt_lsn*/
+#if defined(UNIV_PMEMOBJ_PPL_STAT)
+	start_time = ut_time_us(NULL);
+#endif	
+
 	pmemobj_rwlock_wrlock(pop, &ppl->ckpt_lock);
+
+#if defined(UNIV_PMEMOBJ_PPL_STAT)
+	end_time = ut_time_us(NULL);
+	ppl->log_ckpt_lock_wait_time += (end_time - start_time);
+	ppl->n_log_ckpt++;
+#endif
+
 	ppl->ckpt_lsn = req_ckpt_lsn;
 	//log_sys->last_checkpoint_lsn.store(ppl->ckpt_lsn);
 	pmemobj_rwlock_unlock(pop, &ppl->ckpt_lock);

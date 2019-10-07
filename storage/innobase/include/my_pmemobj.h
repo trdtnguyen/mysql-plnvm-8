@@ -564,6 +564,10 @@ struct __pmem_page_part_log {
 	uint64_t			pmem_mini_free_pool_size;
 	uint64_t			pmem_tt_size;
 
+#if defined(UNIV_PMEMOBJ_PPL_STAT)
+	uint64_t log_ckpt_lock_wait_time; //total time lock holding for checkpointing
+	uint64_t n_log_ckpt; //total ckpts
+#endif
 	/*Debug*/
 	FILE*				deb_file;
 
@@ -639,6 +643,7 @@ struct __pmem_page_log_hashed_line {
 
 	/*Statistic info*/
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
+
 	uint64_t log_write_lock_wait_time; //total time lock holding for copying log records to log buffer
 	uint64_t n_log_write; //total copies
 
