@@ -24,11 +24,14 @@
 
 #include "os0file.h"
 
-#if defined (UNIV_PMEMOBJ_PL)
 
 #if defined (UNIV_PMEMOBJ_PL)
+
 //static FILE* debug_ptxl_file = fopen("pll_debug.txt","a");
 static FILE* lock_overhead_file = fopen("ppl_lock_overhead.txt","a");
+
+/*Log statistic file*/
+static FILE* log_stat_file = fopen("log_stat.txt","a");
 /*Part Log*/
 static uint64_t PMEM_N_LOG_BUCKETS;
 static uint64_t PMEM_N_BLOCKS_PER_BUCKET;
@@ -74,7 +77,6 @@ static uint64_t BIT_BLOCK_SIZE = sizeof(long long);
 /*call pmemobj_persist() at every log record write*/
 static bool PERSIST_AT_WRITE = true;
 
-#endif //UNIV_PMEMOBJ_PL
 //////////////// NEW PMEM PARTITION LOG /////////////
 
 ////////////////// PERPAGE LOGGING ///////////////
@@ -220,6 +222,11 @@ pm_wrapper_page_log_close(
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
 	__print_lock_overhead(lock_overhead_file, pmw->ppl);
 #endif	
+
+#if defined (UNIV_UNDO_DEBUG)
+	__print_log_stat(log_stat_file, pmw->ppl);
+#endif // UNIV_UNDO_DEBUG
+
 	//the resource allocated in NVDIMM are kept
 }
 /*
@@ -961,6 +968,11 @@ pm_ppl_buckets_init(
 	ppl->log_ckpt_lock_wait_time = 0;
 	ppl->n_log_ckpt = 0;
 #endif
+
+#if defined (UNIV_UNDO_DEBUG)
+	ppl->n_redo_logs = ppl->redo_size = ppl->n_rseg_redo_logs = ppl->rseg_redo_size = 0;
+#endif
+
 	/*for each hashed line*/
 	for (i = 0; i < n; i++) {
 		POBJ_ZNEW(pop,
@@ -1760,7 +1772,18 @@ pm_ppl_write_rec(
 	assert (check_size == rec_size);
 	assert (type < MLOG_BIGGEST_TYPE);
 	temp += 2;
+
+#if defined (UNIV_UNDO_DEBUG)
+	ppl->n_redo_logs++;
+	ppl->redo_size += rec_size;
 	
+	/*Redo of UNDO pages has 20 - 25*/	
+	if (type >= MLOG_UNDO_INSERT && type <= MLOG_UNDO_HDR_CREATE) {
+		ppl->n_rseg_redo_logs++;
+		ppl->rseg_redo_size += rec_size;
+	}
+#endif /*UNIV_UNDO_DEBUG*/
+
 	n = ppl->n_buckets;
 	
 	/*New in MySQL 8.0,
@@ -3056,6 +3079,27 @@ pm_ppl_get_line_from_key(
 	return pline;
 }
 //////////////////// STATISTIC FUNCTIONS//////
+void get_current_date(char* str_time) {
+	time_t rawtime;
+	struct tm * timeinfo;
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+
+	sprintf(str_time, "[%d-%d-%d_%d:%d:%d]",
+			timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday,
+			timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+}
+#if defined (UNIV_UNDO_DEBUG)
+void
+__print_log_stat(FILE* f, PMEM_PAGE_PART_LOG* ppl)
+{
+	char str_time[1024];
+	get_current_date(str_time);
+
+	printf("%s total_log_recs total_amount rseg_recs rseg_amount %zu \t %zu \t %zu \t %zu\n",
+			str_time, ppl->n_redo_logs, ppl->redo_size, ppl->n_rseg_redo_logs, ppl->rseg_redo_size);
+}
+#endif
 
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
 void
@@ -3090,17 +3134,22 @@ __print_lock_overhead(FILE* f,
 
 	} //end for
 
-	avg_log_write_lock_wait_time = avg_log_write_lock_wait_time / n;
-	avg_log_flush_lock_wait_time = avg_log_flush_lock_wait_time / n;
+	avg_log_write_lock_wait_time = (avg_log_write_lock_wait_time * 1.0) / n;
+	avg_log_flush_lock_wait_time = (avg_log_flush_lock_wait_time * 1.0) / n;
+	
+	char str_time[1024];
+	get_current_date(str_time);
 
-	fprintf(f, "log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+	fprintf(f, "%s log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+			str_time,
 			ppl->log_ckpt_lock_wait_time,
 			max_log_write_lock_wait_time,
 			avg_log_write_lock_wait_time,
 			max_log_flush_lock_wait_time,
 			avg_log_flush_lock_wait_time);
 
-	printf("log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+	printf("%s log_ckpt_wait(us) max_log_write_wait(us) avg_log_write_wait(us) max_log_flush_wait(us) avg_log_flush_wait \t %zu \t %zu \t %f \t %zu \t %f\n", 
+			str_time,
 			ppl->log_ckpt_lock_wait_time,
 			max_log_write_lock_wait_time,
 			avg_log_write_lock_wait_time,

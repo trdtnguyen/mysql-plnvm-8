@@ -568,6 +568,14 @@ struct __pmem_page_part_log {
 	uint64_t log_ckpt_lock_wait_time; //total time lock holding for checkpointing
 	uint64_t n_log_ckpt; //total ckpts
 #endif
+#if defined (UNIV_UNDO_DEBUG)
+	/*Debug for UNDO logging*/
+	uint64_t n_redo_logs; /*total number of REDO log records issued*/
+	uint64_t redo_size; /*number of bytes of REDO log records*/
+
+	uint64_t n_rseg_redo_logs; /*total redo log records for UNDO pages*/
+	uint64_t rseg_redo_size; /*number of bytes of redo log records for UNDO pages*/
+#endif
 	/*Debug*/
 	FILE*				deb_file;
 
@@ -1865,6 +1873,13 @@ pm_log_fil_node_create(
 /////////////// END LOG FILES ///////////
 
 //Statistic 
+void get_current_date(char* str_time);
+
+#if defined (UNIV_UNDO_DEBUG)
+void
+__print_log_stat(FILE* f, PMEM_PAGE_PART_LOG* ppl);
+#endif
+
 #if defined(UNIV_PMEMOBJ_PPL_STAT)
 void
 __print_lock_overhead(FILE* f,
