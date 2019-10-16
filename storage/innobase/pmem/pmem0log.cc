@@ -26,6 +26,8 @@
 
 
 #if defined (UNIV_PMEMOBJ_PL)
+#include <libpmemobj.h>
+#include <libpmem.h>
 
 //static FILE* debug_ptxl_file = fopen("pll_debug.txt","a");
 static FILE* lock_overhead_file = fopen("ppl_lock_overhead.txt","a");
@@ -162,6 +164,12 @@ pm_wrapper_page_log_alloc_or_open(
 		printf("Total NVDIMM allocated = \t\t %f (MB)\n", (pmw->ppl->pmem_alloc_size * 1.0)/ (1024*1024));
 		float log_file_size_MB = PMEM_LOG_FILE_SIZE * 4 * 1024 * 1.0 / (1024 * 1024);
 		printf("Log files %zu x %f (MB) = \t %f (MB)\n", PMEM_N_LOG_BUCKETS, log_file_size_MB, (PMEM_N_LOG_BUCKETS * log_file_size_MB));
+
+		/*Test PMEM memory, we should ensure the allocated memory is persistent*/
+		/*pmem_is_pmem() require libpmem.h*/
+		bool is_pmem = pmem_is_pmem(pmw->ppl->p_align, pmw->ppl->pmem_alloc_size);
+		unsigned char*  end_addr = pmw->ppl->p_align + pmw->ppl->pmem_alloc_size;
+		printf("Memory address from %zu to %zu isPMEM = %d \n", pmw->ppl->p_align, end_addr, is_pmem);
 		printf(" =================================\n");
 
 	}
@@ -3098,6 +3106,10 @@ __print_log_stat(FILE* f, PMEM_PAGE_PART_LOG* ppl)
 
 	printf("%s total_log_recs total_amount rseg_recs rseg_amount %zu \t %zu \t %zu \t %zu\n",
 			str_time, ppl->n_redo_logs, ppl->redo_size, ppl->n_rseg_redo_logs, ppl->rseg_redo_size);
+
+	fprintf(f, "%s total_log_recs total_amount rseg_recs rseg_amount %zu \t %zu \t %zu \t %zu\n",
+			str_time, ppl->n_redo_logs, ppl->redo_size, ppl->n_rseg_redo_logs, ppl->rseg_redo_size);
+
 }
 #endif
 

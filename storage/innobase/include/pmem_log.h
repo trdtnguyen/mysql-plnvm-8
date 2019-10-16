@@ -111,6 +111,25 @@ static inline PMEM_FILE_COLL* pfc_new(uint64_t file_size){
 		printf("PMEM_INFO: Check pmem version finish.\n");
 	}	
 
+	/*Further checks */
+	int flush;
+	char *e = os_getenv("PMEM_NO_FLUSH");
+	if (e && (strcmp(e, "1") == 0)) {
+		flush = 0;
+		printf("Forced not flushing CPU_cache");
+	} else if (e && (strcmp(e, "0") == 0)) {
+		flush = 1;
+		printf("Forced flushing CPU_cache");
+	} else if (pmem_has_auto_flush() == 1) {
+		flush = 0;
+		printf("Not flushing CPU_cache, eADR detected");
+	} else {
+		flush = 1;
+		printf("Flushing CPU cache");
+	}
+
+
+
 	return pfc;	
 
 err:
